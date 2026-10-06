@@ -1,4 +1,4 @@
-VERSION="1.1.0"
+VERSION="1.1.1"
 #一定要放在第一行
 import  os, sys, win32api, webbrowser, json,  datetime,traceback, ctypes, copy,re,requests
 from laotaoui import *
@@ -1389,7 +1389,15 @@ class Main():
         button_number_select_all = DButton(frame_number, text='\uE13E', font=self.font_icon, command=select_all, takefocus=0)
         button_number_select_all.place(x=140, y=310, width=50, height=50)
 
-        button_number_open_touch_keyboard= DButton(frame_number, text='\uF741', font=self.font_icon, command=OpenTouchKeyboard, takefocus=0)
+        def run_open_touch_keyboard():
+            OpenTouchKeyboard()
+            try:
+                if edit_entry[0] is None:
+                    return
+                edit_entry[0].Entry.focus_set()
+            except:
+                pass
+        button_number_open_touch_keyboard= DButton(frame_number, text='\uF741', font=self.font_icon, command=run_open_touch_keyboard, takefocus=0)
         button_number_open_touch_keyboard.place(x=20, y=370, width=50, height=50)
 
         def commit_and_add():
