@@ -1,4 +1,4 @@
-VERSION="2.0.2"
+VERSION="1.0.2"
 import  os, sys, win32api, webbrowser, json,  datetime,traceback, ctypes, copy
 from laotaoui import *
 import tkinter.font as tkfont
