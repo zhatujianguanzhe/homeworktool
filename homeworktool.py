@@ -1,3 +1,4 @@
+VERSION="1.0.2"
 import  os, sys, win32api, webbrowser, json,  datetime,traceback, ctypes, copy
 from laotaoui import *
 import tkinter.font as tkfont
@@ -63,7 +64,7 @@ HOMEWORK_STYLE_COLORS = {
 
 
 
-VERSION="1.0.2"
+
 MITLICENSE="""MIT License
 
 Copyright © 2026 炸图监管者
