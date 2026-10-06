@@ -1,9 +1,12 @@
-VERSION="1.3.2"
-import  os, sys, win32api, webbrowser, json,  datetime,traceback, ctypes, copy
+VERSION="1.1.0"
+#一定要放在第一行
+import  os, sys, win32api, webbrowser, json,  datetime,traceback, ctypes, copy,re,requests
 from laotaoui import *
 import tkinter.font as tkfont
 from PIL import Image, ImageDraw, ImageFont # 新增这一行
-import re
+
+import urllib.request
+import urllib.error
 
 
 # ========== 导出图片 / 界面默认值（运行时以 settings 为准）==========
@@ -75,8 +78,6 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE."""
 
-
-
 YAHEI_TEXT_FONT = ['微软雅黑', 12]  # 启动时由 settings 覆盖
 
 def parse_homework_style(content):
@@ -97,6 +98,38 @@ def parse_homework_style(content):
         elif ch in HOMEWORK_STYLE_COLORS and color is None:
             color = HOMEWORK_STYLE_COLORS[ch]
     return content[:i], color, bold
+
+
+
+def get_online_version(url: str) -> list:
+    # 获取 GitHub 文本文件第一行，通过 exec 解析版本号，
+    # 并返回形如 [1, 0, 2] 的整数列表。
+    
+    if "github.com" in url and "/blob/" in url:
+        url = url.replace("https://github.com/", "https://raw.githubusercontent.com/").replace("/blob/", "/")
+    
+    
+    # 1. 使用 urllib 获取文件内容
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            content = response.read().decode("utf-8")
+    except (urllib.error.HTTPError, urllib.error.URLError) as e:
+        raise RuntimeError(f"获取文件失败: {e}") from e
+
+    # 2. 获取第一行内容（假设格式为 VERSION="1.0.2"）
+    first_line = content.strip().splitlines()[0]
+
+    namespace = {}
+    exec(first_line, {}, namespace)
+    version_str = namespace.get("VERSION",'0.0.0')
+ 
+    version_list = [int(x) for x in version_str.split(".")]
+    return version_list
+
+def get_local_version():
+    return [int(x) for x in VERSION.split(".")]
+
+
 
 
 # 定义可观察的字典,实现数据变更自动触发UI刷新
@@ -131,14 +164,11 @@ class Main():
                 self.settings = json.load(f)
         except:
             if MessageBoxModern(parent=None,title='警告',text=f"{traceback.format_exc()}",text_blod='读取设置文件失败,是否需要重新创建配置文件?',icon='warning',button_mode=2):
-                with open('homeworktool_template.json','rw',encoding='utf-8') as f:
+                with open('homeworktool_settings.json','w+',encoding='utf-8') as f:
                     f.write('{"password":{"admin":"","default":""},"highlight_box":[0,0,0,0],"EXPORT_FONT_SUBJECT":120,"EXPORT_FONT_CONTENT":100,"EXPORT_FONT_DATE":110,"EXPORT_FONT_SUBJECT_MIN":40,"EXPORT_FONT_CONTENT_MIN":32,"EXPORT_FONT_NAME":"宋体","EXPORT_FONT_FALLBACK_NAMES":["宋体","微软雅黑","MicrosoftYaHei","黑体","SimHei","SegoeUISymbol","SegoeUI","ArialUnicodeMS","Arial"],"EXPORT_LINE_SPACING_CONTENT":10,"EXPORT_LINE_SPACING_SUBJECT":15,"EXPORT_SUBJECT_GAP":32,"EXPORT_MARGIN_X":300,"EXPORT_MARGIN_BOTTOM":150,"EXPORT_DATE_Y":120,"EXPORT_START_Y":280,"EXPORT_GAP_CENTER":60,"YAHEI_TEXT_FONT":"TkDefaultFont","disable_highdpi_scaling":true,"auto_set_desktop_background":true}')
-                    self.settings = json.load(f)
+                    
             else:
                 sys.exit()
-
-
-
 
         try:
             with open('homeworktool_template.json','r',encoding='utf-8') as f:
@@ -168,13 +198,50 @@ class Main():
 
         self.layout_window()
 
+        
+
         self.apply_homework_template()
         self.autoload_homework_histroy()
+        
         self.mainloop()
 
 
+    def check_update(self,):
+        
+        update_file_url = "https://github.com/zhatujianguanzhe/homeworktool/blob/main/homeworktool.py"
+
+        try:
+            online_version = get_online_version(update_file_url)
+            
+        except Exception :
+            online_version=None
+            print(f"获取更新失败:{traceback.format_exc()}")
+            
+        local_version=get_local_version()
+        print(online_version)
+
+        button_open_update_website=DAlphaButton(self.root,command=lambda:webbrowser.open_new_tab("https://github.com/zhatujianguanzhe/homeworktool/releases"),font=YAHEI_TEXT_FONT)
+        button_open_update_website.place(x=920,y=720,width=260,height=60)
+        
+        if online_version==None:
+            button_open_update_website.destroy()
+            tk.Label(self.root,bg=WINDOWBG,text="访问Github失败",fg=TEXTFG,font=YAHEI_TEXT_FONT).place(x=920,y=720,width=260,height=60)
+      
+        elif online_version[0]> local_version[0]:
+            button_open_update_website.config(text=f"发现大更新版本: V{'.'.join([str(x) for x in online_version])}",fg=REDTEXTFG)
+        elif online_version[0]==local_version[0] and online_version[1]> local_version[1]:
+            button_open_update_website.config(text=f"发现质量更新版本: V{'.'.join([str(x) for x in online_version])}",fg=YELLOWTEXTFG)
+        elif online_version[0]==local_version[0] and online_version[1]==local_version[1] and online_version[2]> local_version[2]:
+            button_open_update_website.config(text=f"发现小更新版本: V{'.'.join([str(x) for x in online_version])}",fg=HIGHLIGHT)
+        else:
+            button_open_update_website.destroy()
+            tk.Label(self.root,bg=WINDOWBG,text="当前已是最新版本",fg=GREENLIGHT,font=YAHEI_TEXT_FONT).place(x=920,y=720,width=260,height=60)
+      
+        
+
+
     def load_runtime_settings(self):
-        """从 settings 合并导出/界面常量到 self.export_cfg，并同步全局 YAHEI_TEXT_FONT."""
+        """从 settings 合并导出/界面常量到 self.export_cfg. 并同步全局 YAHEI_TEXT_FONT."""
         global YAHEI_TEXT_FONT
         if not isinstance(getattr(self, 'settings', None), dict):
             self.settings = {}
@@ -616,7 +683,7 @@ class Main():
             self.font_icon=tkfont.Font(family='WS_Segoe_MDL2_Assets',size=self.settings.get('YAHEI_TEXT_FONT',['微软雅黑', 12])[1])
 
 
-        
+        threading.Thread(target=self.check_update,daemon=True).start()
 
         style = ttk.Style()
         style.theme_use("alt")
@@ -689,8 +756,8 @@ class Main():
         self.button_edit_homework=DButton(self.root,text='编辑科目',fg=GREENLIGHT,font=YAHEI_TEXT_FONT,command=self.edit_homework)
         self.button_edit_homework.place(x=920,y=20,width=260,height=60)
 
-        self.button_password_control=DButton(self.root,text='账号密码控制',fg=YELLOWTEXTFG,font=YAHEI_TEXT_FONT,command=self.password_control)
-        self.button_password_control.place(x=920,y=100,width=260,height=60)
+        self.button_export_image=DButton(self.root,text='生成图片',font=YAHEI_TEXT_FONT,fg=HIGHLIGHT,command=self.export_homework_image)
+        self.button_export_image.place(x=920,y=100,width=260,height=60)
 
         self.button_save_homework_file=DButton(self.root,text='写入历史记录',font=YAHEI_TEXT_FONT,command=self.save_homework_history)
         self.button_save_homework_file.place(x=920,y=180,width=260,height=60)
@@ -701,17 +768,18 @@ class Main():
         self.button_clear_history=DButton(self.root,text='清理历史记录',font=YAHEI_TEXT_FONT,fg=REDTEXTFG,command=self.clear_homework_history)
         self.button_clear_history.place(x=920,y=340,width=260,height=60)
 
-        self.button_export_image=DButton(self.root,text='生成图片',font=YAHEI_TEXT_FONT,fg=HIGHLIGHT,command=self.export_homework_image)
-        self.button_export_image.place(x=920,y=420,width=260,height=60)
+  
 
         self.button_exit_app=DButton(self.root,text='关闭程序',font=YAHEI_TEXT_FONT,command=self.exit_app,fg=REDTEXTFG)
-        self.button_exit_app.place(x=920,y=500,width=260,height=60)
+        self.button_exit_app.place(x=920,y=420,width=260,height=60)
 
-        self.button_settings=DButton(self.root,text='全局设定',font=YAHEI_TEXT_FONT,command=self.open_settings_window,)
-        self.button_settings.place(x=920,y=580,width=260,height=60)
+ 
+
+        self.button_settings=DButton(self.root,text='设置',command=self.open_settings_window,)
+        self.button_settings.place(x=920,y=500,width=80,height=30)
 
         self.button_about=DButton(self.root,text='关于',command=self.about,)
-        self.button_about.place(x=1100,y=750,width=80,height=30)
+        self.button_about.place(x=1020,y=500,width=80,height=30)
 
         ConvertPlaceToRelative(self.root)
 
@@ -1598,7 +1666,7 @@ class Main():
         result = PasswordBox(
             title='账号密码控制',
             text='请选择要修改密码的账户,并输入当前密码进行验证.',
-            parent=self.root,
+            parent=self.window_settings,
             defaultuser='admin',
             defaultfocus=1,
             defaultpassword='',
@@ -1610,6 +1678,9 @@ class Main():
 
         if result is None or result[0] is None or result[1] is None:
             return  # 用户取消
+        if result[0].replace(' ','')=='':
+            MessageBoxModern(self.window_settings,icon='error',title='错误',text='用户名不能为空',text_blod='用户名不能为空')
+            return
 
         username, password, _ = result
 
@@ -1621,7 +1692,7 @@ class Main():
 
         if password != correct_pwd:
             MessageBoxModern(
-                parent=self.root,
+                parent=self.window_settings,
                 title='错误',
                 icon='error',
                 text_blod='密码错误',
@@ -1631,7 +1702,7 @@ class Main():
 
         # 验证通过,提示即将输入新密码
         MessageBoxModern(
-            parent=self.root,
+            parent=self.window_settings,
             title='成功',
             icon='correct',
             text_blod='验证成功',
@@ -1649,7 +1720,7 @@ class Main():
 
         if new_pwd1 != new_pwd2:
             MessageBoxModern(
-                parent=self.root,
+                parent=self.window_settings,
                 title='错误',
                 icon='error',
                 text_blod='两次密码不一致',
@@ -1671,15 +1742,15 @@ class Main():
             with open('homeworktool_settings.json', 'w', encoding='utf-8') as f:
                 json.dump(self.settings, f, ensure_ascii=False, indent=2)
             MessageBoxModern(
-                parent=self.root,
+                parent=self.window_settings,
                 title='成功',
                 icon='correct',
                 text_blod='密码修改成功',
-                text=f'账户"{username}"的密码已成功修改.'
+                text=f'账户「{username}」的密码已成功修改.'
             )
         except Exception:
             MessageBoxModern(
-                parent=self.root,
+                parent=self.window_settings,
                 title='错误',
                 icon='error',
                 text_blod='保存设置失败',
@@ -1994,6 +2065,7 @@ class Main():
                 pass
 
         window_settings = tk.Toplevel(self.root)
+        self.window_settings=window_settings
         window_settings.title("软件全局设置")
         SetDarkTitleBar(window_settings)
         width = 920
@@ -2096,7 +2168,10 @@ class Main():
         text_other_word.config(yscrollcommand=scrollber_y_text_other_word.set)
 
         button_advanced = DButton(window_settings, text='高级设置', command=lambda: self.open_advanced_settings_window(window_settings))
-        button_advanced.place(x=20, y=500, width=120, height=30)
+        button_advanced.place(x=20, y=500, width=100, height=30)
+
+        button_password_control=DButton(window_settings,text='账密设置',command=self.password_control)
+        button_password_control.place(x=140,y=500,width=100,height=30)
 
         button_ok = DButton(window_settings, text='确定', default='active')
         button_ok.place(x=720, y=500, width=80, height=30)
@@ -2917,7 +2992,7 @@ class Main():
         label_githubpage=tk.Label(self.about_window,bg=WINDOWBG,fg=SECONDARYTEXTFG,text='个人主页:',anchor='w',)
         label_githubpage.place(x=60,y=360,width=90,height=30)
 
-        button_githubpage=DAlphaButton(self.about_window,text='https://zhatujianguanzhe.github.io',command=lambda:webbrowser.open_new_tab("https://zhatujianguanzhe.github.io"),fg=LINK,anchor='w')
+        button_githubpage=DAlphaButton(self.about_window,text='https://zhatujianguanzhe.github.io',command=lambda:webbrowser.open_new_tab("https://zhatujianguanzhe.github.io"),fg=HIGHLIGHT,anchor='w')
         button_githubpage.place(x=150,y=360,height=30)
 
 
@@ -2925,7 +3000,7 @@ class Main():
         label_github=tk.Label(self.about_window,bg=WINDOWBG,fg=SECONDARYTEXTFG,text='Github:',anchor='w',)
         label_github.place(x=60,y=400,width=90,height=30)
 
-        button_github=DAlphaButton(self.about_window,text='https://github.com/zhatujianguanzhe',command=lambda:webbrowser.open_new_tab("https://github.com/zhatujianguanzhe"),fg=LINK,anchor='w')
+        button_github=DAlphaButton(self.about_window,text='https://github.com/zhatujianguanzhe',command=lambda:webbrowser.open_new_tab("https://github.com/zhatujianguanzhe"),fg=HIGHLIGHT,anchor='w')
         button_github.place(x=150,y=400,height=30)
 
 
@@ -2933,7 +3008,7 @@ class Main():
         label_bilibili=tk.Label(self.about_window,bg=WINDOWBG,fg=SECONDARYTEXTFG,text='Bilibili:',anchor='w',)
         label_bilibili.place(x=60,y=440,width=90,height=30)
 
-        button_bilibili=DAlphaButton(self.about_window,text='https://space.bilibili.com/1342104465',command=lambda:webbrowser.open_new_tab("https://space.bilibili.com/1342104465"),fg=LINK,anchor='w')
+        button_bilibili=DAlphaButton(self.about_window,text='https://space.bilibili.com/1342104465',command=lambda:webbrowser.open_new_tab("https://space.bilibili.com/1342104465"),fg=HIGHLIGHT,anchor='w')
         button_bilibili.place(x=150,y=440,height=30)
 
         label_qq=tk.Label(self.about_window,bg=WINDOWBG,fg=SECONDARYTEXTFG,text='QQ群:',anchor='w',)
