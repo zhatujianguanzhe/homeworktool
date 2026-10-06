@@ -2913,18 +2913,21 @@ class Main():
 
         tk.Label(self.about_window,bg=WINDOWBG,fg=TEXTFG,text='相关链接:',anchor='w').place(x=20,y=320,width=90,height=30)
 
+        label_githubpage=tk.Label(self.about_window,bg=WINDOWBG,fg=SECONDARYTEXTFG,text='个人主页:',anchor='w',)
+        label_githubpage.place(x=60,y=360,width=90,height=30)
+
+        button_githubpage=DAlphaButton(self.about_window,text='https://zhatujianguanzhe.github.io',command=lambda:webbrowser.open_new_tab("https://zhatujianguanzhe.github.io"),fg=LINK,anchor='w')
+        button_githubpage.place(x=150,y=360,height=30)
+
+
 
         label_github=tk.Label(self.about_window,bg=WINDOWBG,fg=SECONDARYTEXTFG,text='Github:',anchor='w',)
-        label_github.place(x=60,y=360,width=90,height=30)
+        label_github.place(x=60,y=400,width=90,height=30)
 
         button_github=DAlphaButton(self.about_window,text='https://github.com/zhatujianguanzhe',command=lambda:webbrowser.open_new_tab("https://github.com/zhatujianguanzhe"),fg=LINK,anchor='w')
-        button_github.place(x=150,y=360,height=30)
+        button_github.place(x=150,y=400,height=30)
 
-        label_discord=tk.Label(self.about_window,bg=WINDOWBG,fg=SECONDARYTEXTFG,text='Discord:',anchor='w',)
-        label_discord.place(x=60,y=400,width=90,height=30)
 
-        button_discord=DAlphaButton(self.about_window,text='https://discord.gg/Ukr55F2Ypc',command=lambda:webbrowser.open_new_tab("https://discord.gg/Ukr55F2Ypc"),fg=LINK,anchor='w')
-        button_discord.place(x=150,y=400,height=30)
 
         label_bilibili=tk.Label(self.about_window,bg=WINDOWBG,fg=SECONDARYTEXTFG,text='Bilibili:',anchor='w',)
         label_bilibili.place(x=60,y=440,width=90,height=30)
