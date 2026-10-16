@@ -1,4 +1,4 @@
-VERSION="1.1.1"
+VERSION="1.1.2"
 #一定要放在第一行
 import  os, sys, win32api, webbrowser, json,  datetime,traceback, ctypes, copy,re,requests
 from laotaoui import *
@@ -218,7 +218,7 @@ class Main():
             print(f"获取更新失败:{traceback.format_exc()}")
             
         local_version=get_local_version()
-        print(online_version)
+        print(f"官网版本: {online_version}")
 
         button_open_update_website=DAlphaButton(self.root,command=lambda:webbrowser.open_new_tab("https://github.com/zhatujianguanzhe/homeworktool/releases"),font=YAHEI_TEXT_FONT)
         button_open_update_website.place(x=920,y=720,width=260,height=60)
@@ -664,7 +664,7 @@ class Main():
 
     def layout_window(self,):
         self.root=tk.Tk()
-        self.root.title('万岁™作业布置工具(合肥一中特供版)')
+        self.root.title('万岁™作业布置与展示工具    (合肥市阳光中学特供版 & 合肥市第一中学特供版)')
         SetDarkTitleBar(self.root)
         width = 1200
         height = 800
@@ -823,14 +823,51 @@ class Main():
             else:
                 MessageBoxModern(self.root, title='错误', icon='error', text_blod='管理员密码错误', text='密码错误,请重试或咨询课管理员.')
 
-    def edit_homework(self,event=None):
+    def edit_homework(self, event=None):
+        """主界面：双击行为见绑定说明；按钮仍按当前选中行编辑科目。"""
+        # —— 双击 Treeview：按列/行类型分流 ——
+        if event is not None and getattr(event, 'widget', None) is self.treeview_homework:
+            try:
+                row = self.treeview_homework.identify_row(event.y)
+                col = self.treeview_homework.identify_column(event.x)
+            except Exception:
+                row, col = '', ''
+            if not row:
+                return
+            parent = self.treeview_homework.parent(row)
+            is_subject_row = (not parent)
+
+            # 科目列：#0（树列）
+            if col in ('#0', ''):
+                if is_subject_row:
+                    # 科目行 → 展开/收起，不打开编辑
+                    try:
+                        opened = bool(self.treeview_homework.item(row, 'open'))
+                        self.treeview_homework.item(row, open=not opened)
+                        self.treeview_homework.selection_set(row)
+                        self.treeview_homework.focus(row)
+                        self.root.after_idle(lambda r=row: self._update_subject_state(r))
+                        self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
+                    except Exception:
+                        pass
+                    return 'break'
+                else:
+                    # 科目列上的作业子行 → 打开该科目编辑
+                    self.open_edit_window_homework(parent)
+                    return 'break'
+            else:
+                # 作业内容列 → 打开编辑（科目行或子行均可）
+                subject = parent if parent else row
+                self.open_edit_window_homework(subject)
+                return 'break'
+
+        # —— 按钮 / 其他调用：按选中行 ——
         selected = self.treeview_homework.selection()
         if not selected:
             win32api.MessageBeep()
             return
         item = selected[0]
         parent = self.treeview_homework.parent(item)
-        # 选中科目或其子作业,都编辑该科目
         subject = parent if parent else item
         self.open_edit_window_homework(subject)
 
@@ -1846,52 +1883,213 @@ class Main():
             )
 
     def load_homework_history(self):
-        """载入历史记录 (控制台输入版)"""
+        """载入历史记录：选日期后弹出科目导入选项窗口。"""
         if not self.verify_admin_password():
             return
-        target_date = EntryBox(self.root,title='日期',text_blod="输入要载入的作业历史记录的日期",text="输入要载入的作业历史记录的日期,格式为yyyy-mm-dd,例如2026-08-05,2025-12-01.",entrys=[['日期:',datetime.datetime.now().strftime('%Y-%m-%d')]])
-            
-        if target_date:
-            target_date=target_date[0]
+        target_date = EntryBox(
+            self.root, title='日期',
+            text_blod='输入要载入的作业历史记录的日期',
+            text='输入要载入的作业历史记录的日期,格式为yyyy-mm-dd,例如2026-08-05,2025-12-01.',
+            entrys=[['日期:', datetime.datetime.now().strftime('%Y-%m-%d')]],
+        )
+        if not target_date:
+            return
+        target_date = target_date[0]
+        try:
+            with open('homeworktool_previous_homework.json', 'r', encoding='utf-8') as f:
+                history = json.load(f)
+        except Exception:
+            MessageBoxModern(
+                parent=self.root, title='错误', icon='error',
+                text_blod='载入历史记录文件失败', text=traceback.format_exc(),
+            )
+            return
+
+        if target_date not in history:
+            MessageBoxModern(
+                parent=self.root, title='错误', icon='error',
+                text_blod='该日作业的历史记录不存在',
+                text=f'找不到{target_date}的作业记录.',
+            )
+            return
+
+        target_homework = history[target_date] or {}
+        # 只展示有内容的科目（或全部历史键）
+        subjects = [s for s, items in target_homework.items() if items]
+        if not subjects:
+            MessageBoxModern(
+                parent=self.root, title='提示', icon='info',
+                text_blod='无可导入内容',
+                text=f'{target_date} 的历史记录中没有作业条目.',
+            )
+            return
+
+        self._open_import_homework_window(target_date, target_homework, subjects)
+
+    def _open_import_homework_window(self, target_date, target_homework, subjects):
+        """导入选项：每个科目一个勾选 + 合并策略下拉。"""
+        MERGE_OPTIONS = ['合并', '直接覆盖']
+
+        def close_win(event=None):
             try:
-                # 读取历史记录文件
-                with open('homeworktool_previous_homework.json', 'r', encoding='utf-8') as f:
-                    history = json.load(f)
+                win.destroy()
+            except Exception:
+                pass
+            try:
+                self.root.focus()
+            except Exception:
+                pass
 
-                # 检查日期是否存在于历史记录中
-                if target_date in history:
-                    target_homework = history[target_date]
+        win = tk.Toplevel(self.root)
+        win.title(f'导入历史记录 日期「{target_date}」')
+        SetDarkTitleBar(win)
+        w, h = 620, 510
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        win.geometry('%dx%d+%d+%d' % (w, h, (sw - w) // 2, (sh - h) // 2))
+        win['bg'] = WINDOWBG
+        win.protocol('WM_DELETE_WINDOW', close_win)
+        win.bind('<Escape>', close_win)
+        win.focus()
 
-                    # 1. 清空当前所有科目的作业数据
-                    for subject in list(self.homework_data.keys()):
-                        self.homework_data[subject] = []
-                        self.treeview_homework.item(subject, open=False) # 收起节点
+        tk.Label(
+            win, bg=WINDOWBG, fg=TEXTFG, anchor='w',
+            text=f'选择要导入的科目与合并方式.  (日期「{target_date}」)',
+            font=YAHEI_TEXT_FONT,
+        ).place(x=20, y=20, width=600, height=30)
 
-                    # 2. 遍历并加载指定日期的作业数据
-                    for subject, homework_list in target_homework.items():
-                        if subject in self.homework_data:
-                            # 触发字典监听器,自动刷新 UI
-                            self.homework_data[subject] = homework_list
-                        else:
-                            # 如果是新科目,新建父节点并赋值
-                            self.treeview_homework.insert('', 'end', iid=subject, text=subject, values=('',))
-                            self.homework_data[subject] = homework_list
+        # 外层 Text 作为可滚动容器（样式与程序内其他 Text 一致）
+        text_box = tk.Text(
+            win, bd=0, highlightthickness=0, bg=WIDGETBG, fg=TEXTFG,
+            font=YAHEI_TEXT_FONT,
+            insertbackground=GREENLIGHT,
+            insertontime=500, insertofftime=500, insertwidth=3,
+            selectforeground=TEXTFG, selectbackground=HIGHLIGHT,
+            cursor='arrow',
+        )
+        text_box.place(x=20, y=60, width=560, height=380)
+        SetBorder(text_box)
+        scroll = DScrollbar(win, bg=WINDOWBG, command=text_box.yview)
+        scroll.place(x=580, y=60, width=20, height=380)
+        text_box.config(yscrollcommand=scroll.set)
 
-                    # 3. 展开所有有作业的科目节点并刷新状态
-                    for subject in self.homework_data.keys():
-                        if self.homework_data[subject]:
-                            self.treeview_homework.item(subject, open=True)
-                        self._update_subject_state(subject)
+        # 每科目：Frame + DCheckbutton + DCombobutton
+        row_vars = {}  # subject -> (BoolVar, StringVar / combobutton)
 
-                    # 成功提示
-                    MessageBoxModern(parent=self.root, title='成功', text=f'已成功载入{target_date}的作业记录.', text_blod='载入历史记录成功', icon='correct')
+        for subject in subjects:
+            hist_items = target_homework.get(subject) or []
+            cur_items = list(self.homework_data.get(subject, []) or [])
+            tip = f'历史{len(hist_items)}条 / 当前{len(cur_items)}条'
+
+            frame = tk.Frame(text_box, bg=WIDGETBG, bd=0, highlightthickness=0, width=520, height=40)
+            frame.pack_propagate(False)
+            # Text 内嵌：与其他控件间距约 20
+            text_box.window_create('end', window=frame, padx=20, pady=10)
+            text_box.insert('end', '\n')
+
+            var_check = tk.BooleanVar(value=True)
+            chk = DCheckbutton(
+                frame, text=f'{subject}  ({tip})',
+                variable=var_check,
+            )
+            chk.place(x=0, y=4, width=280, height=32)
+
+            combo = DCombobutton(
+                frame, values=MERGE_OPTIONS, state='readonly',
+            )
+            combo['state']='normal'
+
+            combo.delete(0, tk.END)
+            combo.insert(0, MERGE_OPTIONS[0])
+
+            combo['state']='readonly'
+            
+        
+            # 右侧下拉，与左侧勾选间距 20
+            combo.place(x=300, y=4, width=200, height=32)
+
+            row_vars[subject] = (var_check, combo)
 
 
+        text_box.config(state='disabled')
+
+        def do_import():
+            imported_any = False
+            for subject, (var_check, combo) in row_vars.items():
+                if not var_check.get():
+                    continue
+                try:
+                    mode = combo.Entry.get().strip()
+                except Exception:
+                    try:
+                        mode = combo.get().strip()
+                    except Exception:
+                        mode = MERGE_OPTIONS[0]
+                if mode not in MERGE_OPTIONS:
+                    mode = MERGE_OPTIONS[0]
+
+                hist_list = list(target_homework.get(subject) or [])
+                cur_list = list(self.homework_data.get(subject, []) or [])
+
+                if mode == '直接覆盖':
+                    new_list = list(hist_list)
                 else:
-                    MessageBoxModern(parent=self.root, title='错误', text=f'找不到{target_date}的作业记录.', text_blod='该日作业的历史记录不存在', icon='error')
-                    
-            except :
-                MessageBoxModern(parent=self.root, title='错误', text=traceback.format_exc(), text_blod='载入历史记录文件失败', icon='error')
+                    # 合并（默认）：当前在前，历史中未出现的条目追加
+                    seen = set(cur_list)
+                    new_list = list(cur_list)
+                    for item in hist_list:
+                        if item not in seen:
+                            new_list.append(item)
+                            seen.add(item)
+
+                if subject not in self.homework_data:
+                    if not self.treeview_homework.exists(subject):
+                        self.treeview_homework.insert('', 'end', iid=subject, text=subject, values=('',))
+                    self.homework_data[subject] = new_list
+                else:
+                    self.homework_data[subject] = new_list
+                imported_any = True
+
+            # 展开有作业的科目并刷新状态
+            for subject in self.homework_data.keys():
+                try:
+                    if self.homework_data[subject]:
+                        self.treeview_homework.item(subject, open=True)
+                    self._update_subject_state(subject)
+                except Exception:
+                    pass
+            try:
+                self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
+            except Exception:
+                pass
+
+            close_win()
+            if imported_any:
+                MessageBoxModern(
+                    parent=self.root, title='成功', icon='correct',
+                    text_blod='载入历史记录成功',
+                    text=f'已按所选策略导入「{target_date}」的作业记录.',
+                )
+            else:
+                MessageBoxModern(
+                    parent=self.root, title='提示', icon='info',
+                    text_blod='未导入任何科目',
+                    text='请至少勾选一个科目后再确定.',
+                )
+
+        btn_ok = DButton(win, text='确定', default='active', command=do_import)
+        btn_ok.place(x=420, y=460, width=80, height=30)
+        btn_cancel = DButton(win, text='取消', command=close_win)
+        btn_cancel.place(x=520, y=460, width=80, height=30)
+
+        try:
+            ConvertPlaceToRelative(win)
+        except Exception:
+            pass
+        try:
+            win.iconbitmap(f'{libresource}icon.ico')
+        except Exception:
+            pass
+        win.wait_window()
 
     def autoload_homework_histroy(self):
         try:
@@ -2971,7 +3169,7 @@ class Main():
         self.about_window.focus()
 
 
-        label_title=tk.Label(self.about_window,bg=WINDOWBG,text='万岁™作业布置工具(合肥一中特供版)',anchor='center',fg=TEXTFG)
+        label_title=tk.Label(self.about_window,bg=WINDOWBG,text='万岁™作业布置与展示工具',anchor='center',fg=TEXTFG)
         set_label_font(label_title,add_size=18,bold=True)
         label_title.place(x=00,y=20,width=800,height=70)
 
