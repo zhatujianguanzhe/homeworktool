@@ -1,9 +1,9 @@
-VERSION="1.1.2"
+VERSION="1.1.3"
 #一定要放在第一行
-import  os, sys, win32api, webbrowser, json,  datetime,traceback, ctypes, copy,re,requests
+import  os, sys, win32api, webbrowser, json,  datetime,traceback, ctypes, copy,re
 from laotaoui import *
 import tkinter.font as tkfont
-from PIL import Image, ImageDraw, ImageFont # 新增这一行
+from PIL import Image, ImageDraw, ImageFont 
 
 import urllib.request
 import urllib.error
@@ -630,8 +630,12 @@ class Main():
                 fill = style_color if style_color else text_color
                 draw_text_mixed(draw, (x, y), text, fill, font, bold=bool(style_bold))
 
-            filename = f"{date}.jpg"
+            filename = f"./homework_image/{date}.jpg"
             filepath = os.path.abspath(filename)
+            
+            dir_path = os.path.dirname(filepath)
+            os.makedirs(dir_path, exist_ok=True)
+            
             img.save(filepath, 'JPEG', quality=95)
 
             # 设为桌面壁纸（Windows，受 auto_set_desktop_background 开关控制）
@@ -1032,9 +1036,10 @@ class Main():
             return False
 
         def cancel_edit():
-            """取消本次编辑：丢弃输入,恢复原内容,不改 working_list"""
+            """取消本次编辑：丢弃输入；若是新建的空行则移除，否则保留原内容"""
             if edit_entry[0] is None:
                 return
+            idx = editing_index[0]
             try:
                 edit_entry[0].destroy()
             except Exception:
@@ -1046,7 +1051,14 @@ class Main():
                 button_ok.bind_default_active()
             except Exception:
                 pass
-            # 原内容仍在 working_list,刷新显示即可
+            # 新建行在 start 前已 append('')，取消时应删掉该空行；已有内容的行 working_list 未改，刷新即可
+            if idx is not None and 0 <= idx < len(working_list):
+                if working_list[idx].replace('\t', '').replace(' ', '') == '':
+                    del working_list[idx]
+                    try:
+                        sync_to_data()
+                    except Exception:
+                        pass
             refresh_tree()
 
         def commit_edit():
