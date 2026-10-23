@@ -1,9 +1,9 @@
-VERSION="1.1.3"
+VERSION="1.1.5"
 #一定要放在第一行
 import  os, sys, win32api, webbrowser, json,  datetime,traceback, ctypes, copy,re
 from laotaoui import *
 import tkinter.font as tkfont
-from PIL import Image, ImageDraw, ImageFont 
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 import urllib.request
 import urllib.error
@@ -51,7 +51,7 @@ ADVANCED_SETTING_ROWS = [
     ('内容起始纵向位置', 'EXPORT_START_Y'),
     ('中间分割线两侧留白', 'EXPORT_GAP_CENTER'),
     ('高亮矩形[x,y,宽,高]', 'highlight_box'),
-    ('界面字体(名称或[名称,字号])', 'YAHEI_TEXT_FONT'),
+    ('界面字体(名称(如TkDefaultFont)或["名称",字号])', 'YAHEI_TEXT_FONT'),
 
 ]
 
@@ -692,7 +692,7 @@ class Main():
         style = ttk.Style()
         style.theme_use("alt")
 
-        style.configure("Treeview", rowheight=40,
+        style.configure("Main.Treeview", rowheight=40,
                         fieldbackground=WINDOWBG,
                         background=WINDOWBG,
                         foregroung=TEXTFG,
@@ -700,7 +700,7 @@ class Main():
                         highlightthickness=0,
                         font=YAHEI_TEXT_FONT ) # 填充背景色
    
-        style.configure("Treeview.Heading",
+        style.configure("Main.Treeview.Heading",
                         background=WINDOWBG,      # 表头背景色
                         foreground=TEXTFG,        # 表头文字颜色
                         borderwidth=0,
@@ -708,7 +708,7 @@ class Main():
                         font=YAHEI_TEXT_FONT)          # 扁平化边框
         # 3. 关键步骤：锁死动态样式（防止鼠标悬停或点击时变回系统默认的灰色）
         
-        style.map("Treeview.Heading",
+        style.map("Main.Treeview.Heading",
                 background=[('active', WIDGETBG),  # 鼠标悬停时的深蓝色
                             ('pressed', WINDOWBG)], # 鼠标点击时的更深蓝色
                 foreground=[('active', TEXTFG),
@@ -716,7 +716,7 @@ class Main():
                 borderwidth=[('active', 0), ('pressed', 0)],    
                 highlightthickness=[('active', 0), ('pressed', 0)],   )
         # 配置被选中时的颜色
-        style.map("Treeview",
+        style.map("Main.Treeview",
                 background=[('selected', AlphaBlend(WINDOWBG,HIGHLIGHT,0.5))],
                 foreground=[('selected',TEXTFG )],
                 borderwidth=[('active', 0), ('pressed', 0)],    # 外边框宽度设为 0
@@ -725,7 +725,7 @@ class Main():
         self.scrollbar_treeview_y=DScrollbar(self.root)
         self.scrollbar_treeview_y.place(x=870,y=20,width=30,height=760)
         self.treeview_homework= ttk.Treeview(self.root, show="tree headings", columns=["homework"],takefocus=True,
-                                          selectmode='browse', yscrollcommand=self.scrollbar_treeview_y.set)
+                                          selectmode='browse', yscrollcommand=self.scrollbar_treeview_y.set,style='Main.Treeview')
         self.treeview_homework.place(x=20,y=20,width=850,height=760)
 
         self.scrollbar_treeview_y.config(command=self.treeview_homework.yview)
@@ -763,7 +763,7 @@ class Main():
         self.button_export_image=DButton(self.root,text='生成图片',font=YAHEI_TEXT_FONT,fg=HIGHLIGHT,command=self.export_homework_image)
         self.button_export_image.place(x=920,y=100,width=260,height=60)
 
-        self.button_save_homework_file=DButton(self.root,text='写入历史记录',font=YAHEI_TEXT_FONT,command=self.save_homework_history)
+        self.button_save_homework_file=DButton(self.root,text='保存作业',font=YAHEI_TEXT_FONT,command=self.save_homework_history)
         self.button_save_homework_file.place(x=920,y=180,width=260,height=60)
 
         self.button_load_homework_file=DButton(self.root,text='载入历史记录',font=YAHEI_TEXT_FONT,command=self.load_homework_history)
@@ -963,7 +963,7 @@ class Main():
         scrollbar_y.place(x=860, y=20, width=20, height=300)
 
         tree = ttk.Treeview(window_homework, show="tree headings", columns=["homework"],
-                            takefocus=True, selectmode='browse',
+                            takefocus=True, selectmode='browse',style='Main.Treeview',
                             yscrollcommand=scrollbar_y.set)
         tree.place(x=20, y=20, width=840, height=300)
         scrollbar_y.config(command=tree.yview)
@@ -1502,7 +1502,11 @@ class Main():
 
         # 填充候选词（科目已固定）
         def toggle_style_marker(letter):
-            """在作业末尾切换样式字母：无则追加,有则删除;只处理末尾连续的 RGYBO."""
+            """在作业末尾切换样式字母.
+            - O：有则删、无则加（可与一个颜色共存）
+            - R/G/Y/B：末尾只允许一个颜色；点新颜色会替换旧颜色；再点同一颜色则去掉
+            只处理末尾连续的 RGYBO.
+            """
             if edit_entry[0] is None:
                 win32api.MessageBeep()
                 return
@@ -1515,12 +1519,37 @@ class Main():
             i = len(s)
             while i > 0 and s[i - 1] in HOMEWORK_STYLE_MARKERS:
                 i -= 1
-            body, markers = s[:i], list(s[i:])
-            if letter in markers:
-                markers = [m for m in markers if m != letter]
+            body = s[:i]
+            markers = list(s[i:])
+            color_letters = set(HOMEWORK_STYLE_COLORS.keys())  # R G Y B
+
+            if letter == 'O':
+                if 'O' in markers:
+                    markers = [m for m in markers if m != 'O']
+                else:
+                    markers.append('O')
+            elif letter in color_letters:
+                if letter in markers:
+                    # 再点同一颜色 → 去掉该颜色，保留 O
+                    markers = [m for m in markers if m != letter]
+                else:
+                    # 换新颜色：去掉所有旧颜色，保留 O，再追加本颜色
+                    markers = [m for m in markers if m not in color_letters]
+                    markers.append(letter)
             else:
-                markers.append(letter)
-            new_s = body + ''.join(markers)
+                # 非预期字母，忽略
+                return
+
+            # 规范化顺序：颜色在前、O 在后，且最多各一个
+            has_o = 'O' in markers
+            colors = [m for m in markers if m in color_letters]
+            color = colors[-1] if colors else None
+            tail = ''
+            if color:
+                tail += color
+            if has_o:
+                tail += 'O'
+            new_s = body + tail
             try:
                 target.delete(0, tk.END)
                 target.insert(0, new_s)
@@ -1653,10 +1682,9 @@ class Main():
         def ok():
             nonlocal result
             result=entry_password.get()
-            if result=='':
-                win32api.MessageBeep()
-            else:
-                close_window_password()
+        
+            
+            close_window_password()
 
 
         button_number_backspace=DButton(window_password,text='\uE750',font=self.font_icon,command=delete_back)
@@ -1895,18 +1923,10 @@ class Main():
             )
 
     def load_homework_history(self):
-        """载入历史记录：选日期后弹出科目导入选项窗口。"""
+        """载入历史记录：左侧日期列表 + 右侧图片预览，确定后进入科目导入窗口。"""
         if not self.verify_admin_password():
             return
-        target_date = EntryBox(
-            self.root, title='日期',
-            text_blod='输入要载入的作业历史记录的日期',
-            text='输入要载入的作业历史记录的日期,格式为yyyy-mm-dd,例如2026-08-05,2025-12-01.',
-            entrys=[['日期:', datetime.datetime.now().strftime('%Y-%m-%d')]],
-        )
-        if not target_date:
-            return
-        target_date = target_date[0]
+
         try:
             with open('homeworktool_previous_homework.json', 'r', encoding='utf-8') as f:
                 history = json.load(f)
@@ -1917,26 +1937,202 @@ class Main():
             )
             return
 
-        if target_date not in history:
-            MessageBoxModern(
-                parent=self.root, title='错误', icon='error',
-                text_blod='该日作业的历史记录不存在',
-                text=f'找不到{target_date}的作业记录.',
-            )
-            return
-
-        target_homework = history[target_date] or {}
-        # 只展示有内容的科目（或全部历史键）
-        subjects = [s for s, items in target_homework.items() if items]
-        if not subjects:
+        if not isinstance(history, dict) or not history:
             MessageBoxModern(
                 parent=self.root, title='提示', icon='info',
-                text_blod='无可导入内容',
-                text=f'{target_date} 的历史记录中没有作业条目.',
+                text_blod='无历史记录', text='homeworktool_previous_homework.json 中没有任何日期记录.',
             )
             return
 
-        self._open_import_homework_window(target_date, target_homework, subjects)
+        # 仅使用历史文件中出现的日期，忽略磁盘上多余图片
+        date_list = sorted(
+            (d for d in history.keys() if isinstance(history.get(d), dict)),
+            reverse=True,
+        )
+        if not date_list:
+            MessageBoxModern(
+                parent=self.root, title='提示', icon='info',
+                text_blod='无历史记录', text='历史文件中没有可导入的日期条目.',
+            )
+            return
+
+        def close_win(event=None):
+            try:
+                win.destroy()
+            except Exception:
+                pass
+            try:
+                self.root.focus()
+            except Exception:
+                pass
+
+        win = tk.Toplevel(self.root)
+        win.title('载入历史记录')
+        SetDarkTitleBar(win)
+        w, h = 900, 540
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        win.geometry('%dx%d+%d+%d' % (w, h, (sw - w) // 2, (sh - h) // 2))
+        win['bg'] = WINDOWBG
+        win.protocol('WM_DELETE_WINDOW', close_win)
+        win.bind('<Escape>', close_win)
+        win.focus()
+
+        # 左侧日期列表 + 滚动条（样式与设置界面 Listbox 一致）
+        listbox_date = tk.Listbox(
+            win, bd=0, bg=TEXTBG, highlightthickness=0, fg=TEXTFG,
+            activestyle='none', selectmode='browse', exportselection=0,
+            selectbackground=AlphaBlend(HIGHLIGHT, TEXTBG, 0.5), selectforeground=TEXTFG,
+            font=YAHEI_TEXT_FONT,
+        )
+        listbox_date.place(x=20, y=20, width=180, height=450)
+        scrollbar_date = DScrollbar(win, command=listbox_date.yview)
+        scrollbar_date.place(x=200, y=20, width=20, height=450)
+        listbox_date.config(yscrollcommand=scrollbar_date.set)
+
+        for d in date_list:
+            listbox_date.insert(tk.END, d)
+
+        # 右侧预览区域
+        preview_frame = tk.Frame(win, bg=TEXTBG, highlightthickness=0, bd=0)
+        preview_frame.place(x=240, y=20, width=640, height=450)
+
+        label_preview = tk.Label(
+            preview_frame, bg=TEXTBG, fg=SECONDARYTEXTFG,
+            text='选择日期', anchor='center', font=YAHEI_TEXT_FONT,bd=1,relief='solid',)
+        label_preview.place(x=0, y=0, relwidth=1, relheight=1)
+
+        # 防止 PhotoImage 被回收；记住当前预览日期与源图
+        label_preview._photo_ref = None
+        preview_state = {'date': None, 'src_img': None, 'after_id': None}
+
+        def clear_preview(msg='找不到图片'):
+            preview_state['date'] = None
+            preview_state['src_img'] = None
+            label_preview._photo_ref = None
+            label_preview.config(image='', text=msg, fg=SECONDARYTEXTFG)
+
+        def _render_preview_image(src_img):
+            """按预览控件当前尺寸等比缩放（以更短边为限，完整装入控件内）."""
+            try:
+                preview_frame.update_idletasks()
+                pw = max(int(preview_frame.winfo_width()), 1)
+                ph = max(int(preview_frame.winfo_height()), 1)
+            except Exception:
+                pw, ph = 640, 450
+            iw, ih = src_img.size
+            if iw <= 0 or ih <= 0:
+                clear_preview('找不到图片')
+                return
+            # 更短的一边决定缩放比，保证整图可见
+            scale = min(pw / float(iw), ph / float(ih))
+            nw = max(1, int(iw * scale))
+            nh = max(1, int(ih * scale))
+            try:
+                resized = src_img.resize((nw, nh), Image.Resampling.LANCZOS)
+            except Exception:
+                resized = src_img.resize((nw, nh), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(resized)
+            label_preview._photo_ref = photo
+            label_preview.config(image=photo, text='')
+
+        def show_preview_for_date(date_str):
+            if not date_str:
+                clear_preview('请选择日期')
+                return
+            img_path = os.path.abspath(os.path.join('.', 'homework_image', f'{date_str}.jpg'))
+            if not os.path.isfile(img_path):
+                clear_preview('找不到图片')
+                return
+            try:
+                src = Image.open(img_path)
+                # 转为 RGB 副本，避免文件句柄与模式问题
+                try:
+                    src = src.convert('RGB')
+                except Exception:
+                    pass
+                preview_state['date'] = date_str
+                preview_state['src_img'] = src
+                _render_preview_image(src)
+            except Exception:
+                clear_preview('找不到图片')
+
+        def on_preview_configure(event=None):
+            """窗口/预览区尺寸变化时重新等比缩放."""
+            src = preview_state.get('src_img')
+            if src is None:
+                return
+            aid = preview_state.get('after_id')
+            if aid is not None:
+                try:
+                    win.after_cancel(aid)
+                except Exception:
+                    pass
+            def _do():
+                preview_state['after_id'] = None
+                if preview_state.get('src_img') is not None:
+                    _render_preview_image(preview_state['src_img'])
+            preview_state['after_id'] = win.after(50, _do)
+
+        def on_date_select(event=None):
+            sel = listbox_date.curselection()
+            if not sel:
+                clear_preview('请选择日期')
+                return
+            show_preview_for_date(listbox_date.get(sel[0]))
+
+        listbox_date.bind('<<ListboxSelect>>', on_date_select)
+        preview_frame.bind('<Configure>', on_preview_configure)
+        label_preview.bind('<Configure>', on_preview_configure)
+
+        # 默认选中第一项并预览
+        listbox_date.selection_set(0)
+        listbox_date.activate(0)
+        listbox_date.see(0)
+        show_preview_for_date(date_list[0])
+
+        def do_ok(event=None):
+            sel = listbox_date.curselection()
+            if not sel:
+                MessageBoxModern(
+                    parent=win, title='错误', icon='error',
+                    text_blod='未选择日期', text='请先在左侧选择要载入的日期.',
+                )
+                return
+            target_date = listbox_date.get(sel[0])
+            if target_date not in history:
+                MessageBoxModern(
+                    parent=win, title='错误', icon='error',
+                    text_blod='该日作业的历史记录不存在',
+                    text=f'找不到{target_date}的作业记录.',
+                )
+                return
+            target_homework = history.get(target_date) or {}
+            subjects = [s for s, items in target_homework.items() if items]
+            if not subjects:
+                MessageBoxModern(
+                    parent=win, title='错误', icon='error',
+                    text_blod='无可导入内容',
+                    text=f'「{target_date}」的历史记录中没有作业条目.',
+                )
+                return
+            close_win()
+            self._open_import_homework_window(target_date, target_homework, subjects)
+
+        btn_ok = DButton(win, text='确定', default='active', command=do_ok)
+        btn_ok.place(x=700, y=490, width=80, height=30)
+        btn_cancel = DButton(win, text='取消', command=close_win)
+        btn_cancel.place(x=800, y=490, width=80, height=30)
+
+        try:
+            ConvertPlaceToRelative(win)
+        except Exception:
+            pass
+        try:
+            win.iconbitmap(f'{libresource}icon.ico')
+        except Exception:
+            pass
+        win.wait_window()
+
 
     def _open_import_homework_window(self, target_date, target_homework, subjects):
         """导入选项：每个科目一个勾选 + 合并策略下拉。"""
@@ -1972,7 +2168,7 @@ class Main():
         # 外层 Text 作为可滚动容器（样式与程序内其他 Text 一致）
         text_box = tk.Text(
             win, bd=0, highlightthickness=0, bg=WIDGETBG, fg=TEXTFG,
-            font=YAHEI_TEXT_FONT,
+            font='TkDefaultFont',
             insertbackground=GREENLIGHT,
             insertontime=500, insertofftime=500, insertwidth=3,
             selectforeground=TEXTFG, selectbackground=HIGHLIGHT,
@@ -1992,7 +2188,7 @@ class Main():
             cur_items = list(self.homework_data.get(subject, []) or [])
             tip = f'历史{len(hist_items)}条 / 当前{len(cur_items)}条'
 
-            frame = tk.Frame(text_box, bg=WIDGETBG, bd=0, highlightthickness=0, width=520, height=40)
+            frame = tk.Frame(text_box, bg=WINDOWBG, bd=0, highlightthickness=0, width=520, height=60)
             frame.pack_propagate(False)
             # Text 内嵌：与其他控件间距约 20
             text_box.window_create('end', window=frame, padx=20, pady=10)
@@ -2003,7 +2199,7 @@ class Main():
                 frame, text=f'{subject}  ({tip})',
                 variable=var_check,
             )
-            chk.place(x=0, y=4, width=280, height=32)
+            chk.pack(padx=[10,5],pady=10,fill='x',side='left')#x=0, y=4, width=280, height=32)
 
             combo = DCombobutton(
                 frame, values=MERGE_OPTIONS, state='readonly',
@@ -2017,7 +2213,7 @@ class Main():
             
         
             # 右侧下拉，与左侧勾选间距 20
-            combo.place(x=300, y=4, width=200, height=32)
+            combo.pack(padx=[5,10],pady=10,fill='x',side='right')#.place(x=300, y=4, width=200, height=32)
 
             row_vars[subject] = (var_check, combo)
 
@@ -2357,7 +2553,7 @@ class Main():
         def _make_settings_text(parent):
             """样式参考 MCLangTool 主文本框."""
             t = tk.Text(parent, bd=0, highlightthickness=0, bg=TEXTBG, fg=TEXTFG,
-                                 font=YAHEI_TEXT_FONT,
+                                 font='TkDefaultFont',
                                  insertbackground=GREENLIGHT,
                                  insertontime=500, insertofftime=500, insertwidth=3,
                                  selectforeground=TEXTFG, selectbackground=HIGHLIGHT,)
@@ -2778,13 +2974,10 @@ class Main():
         style.configure(
             'Adv.Treeview', rowheight=28,
             fieldbackground=WINDOWBG, background=WINDOWBG, foreground=TEXTFG,
-            borderwidth=0, highlightthickness=0, font=YAHEI_TEXT_FONT,
-        )
+            borderwidth=0, highlightthickness=0,)
         style.configure(
             'Adv.Treeview.Heading',
-            background=WINDOWBG, foreground=TEXTFG, borderwidth=0, highlightthickness=0,
-            font=YAHEI_TEXT_FONT,
-        )
+            background=WINDOWBG, foreground=TEXTFG, borderwidth=0, highlightthickness=0,)
         style.map(
             'Adv.Treeview.Heading',
             background=[('active', WIDGETBG), ('pressed', WINDOWBG)],
