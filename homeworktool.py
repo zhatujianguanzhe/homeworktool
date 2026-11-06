@@ -1,4 +1,4 @@
-VERSION="1.1.5"
+VERSION="1.2.1"
 #一定要放在第一行
 import  os, sys, win32api, webbrowser, json,  datetime,traceback, ctypes, copy,re
 from laotaoui import *
@@ -29,6 +29,7 @@ DEFAULT_EXPORT_SETTINGS = {
     'EXPORT_DATE_Y': 120,
     'EXPORT_START_Y': 280,
     'EXPORT_GAP_CENTER': 60,
+    'EXPORT_FONT_ATTENDANCE': 90,
     'highlight_box': [0, 0, 0, 0],
     'color_mode':'system'
 }
@@ -38,6 +39,7 @@ ADVANCED_SETTING_ROWS = [
     ('科目标题字号', 'EXPORT_FONT_SUBJECT'),
     ('作业内容字号', 'EXPORT_FONT_CONTENT'),
     ('日期字号', 'EXPORT_FONT_DATE'),
+    ('考勤字号', 'EXPORT_FONT_ATTENDANCE'),
     ('科目标题最小字号', 'EXPORT_FONT_SUBJECT_MIN'),
     ('作业内容最小字号', 'EXPORT_FONT_CONTENT_MIN'),
     ('导出主字体名称', 'EXPORT_FONT_NAME'),
@@ -56,7 +58,7 @@ ADVANCED_SETTING_ROWS = [
 ]
 
 # 作业末尾样式标记（保存时保留;导出时解析后去掉）
-HOMEWORK_STYLE_MARKERS = frozenset('RGYBO')
+HOMEWORK_STYLE_MARKERS = frozenset('RGYBOF')
 HOMEWORK_STYLE_COLORS = {
     'R': (200, 30, 30),
     'G': (0, 110, 40),
@@ -81,23 +83,29 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 YAHEI_TEXT_FONT = ['微软雅黑', 12]  # 启动时由 settings 覆盖
 
 def parse_homework_style(content):
-    """解析作业末尾的 R/G/Y/B/O 标记,返回 (显示文本, 颜色RGB或None, 是否加粗)."""
+    """解析作业末尾的 R/G/Y/B/O/F 标记.
+    返回 (显示文本, 颜色RGB或None, 是否加粗, 是否反色).
+    F=反色：黑底；前景默认白，仍受颜色/加粗影响。
+    """
     if not content:
-        return '', None, False
+        return '', None, False, False
     i = len(content)
     found = []
     while i > 0 and content[i - 1] in HOMEWORK_STYLE_MARKERS:
         i -= 1
         found.append(content[i])
-    # found 从右到左,颜色取最靠近正文的那一个之后仍以「最右优先」：从右往左第一个颜色字母
+    # found 从右到左
     color = None
     bold = False
-    for ch in found:  # 已是从右到左
+    inverse = False
+    for ch in found:
         if ch == 'O':
             bold = True
+        elif ch == 'F':
+            inverse = True
         elif ch in HOMEWORK_STYLE_COLORS and color is None:
             color = HOMEWORK_STYLE_COLORS[ch]
-    return content[:i], color, bold
+    return content[:i], color, bold, inverse
 
 
 
@@ -165,7 +173,7 @@ class Main():
         except:
             if MessageBoxModern(parent=None,title='警告',text=f"{traceback.format_exc()}",text_blod='读取设置文件失败,是否需要重新创建配置文件?',icon='warning',button_mode=2):
                 with open('homeworktool_settings.json','w+',encoding='utf-8') as f:
-                    f.write('{"password":{"admin":"","default":""},"highlight_box":[0,0,0,0],"EXPORT_FONT_SUBJECT":120,"EXPORT_FONT_CONTENT":100,"EXPORT_FONT_DATE":110,"EXPORT_FONT_SUBJECT_MIN":40,"EXPORT_FONT_CONTENT_MIN":32,"EXPORT_FONT_NAME":"宋体","EXPORT_FONT_FALLBACK_NAMES":["宋体","微软雅黑","MicrosoftYaHei","黑体","SimHei","SegoeUISymbol","SegoeUI","ArialUnicodeMS","Arial"],"EXPORT_LINE_SPACING_CONTENT":10,"EXPORT_LINE_SPACING_SUBJECT":15,"EXPORT_SUBJECT_GAP":32,"EXPORT_MARGIN_X":300,"EXPORT_MARGIN_BOTTOM":150,"EXPORT_DATE_Y":120,"EXPORT_START_Y":280,"EXPORT_GAP_CENTER":60,"YAHEI_TEXT_FONT":"TkDefaultFont","disable_highdpi_scaling":true,"auto_set_desktop_background":true}')
+                    f.write('{"password":{"admin":"","default":""},"highlight_box":[0,0,0,0],"EXPORT_FONT_SUBJECT":120,"EXPORT_FONT_CONTENT":100,"EXPORT_FONT_DATE":110,"EXPORT_FONT_ATTENDANCE":90,"EXPORT_FONT_SUBJECT_MIN":40,"EXPORT_FONT_CONTENT_MIN":32,"EXPORT_FONT_NAME":"宋体","EXPORT_FONT_FALLBACK_NAMES":["宋体","微软雅黑","MicrosoftYaHei","黑体","SimHei","SegoeUISymbol","SegoeUI","ArialUnicodeMS","Arial"],"EXPORT_LINE_SPACING_CONTENT":10,"EXPORT_LINE_SPACING_SUBJECT":15,"EXPORT_SUBJECT_GAP":32,"EXPORT_MARGIN_X":300,"EXPORT_MARGIN_BOTTOM":150,"EXPORT_DATE_Y":120,"EXPORT_START_Y":280,"EXPORT_GAP_CENTER":60,"YAHEI_TEXT_FONT":"TkDefaultFont","disable_highdpi_scaling":true,"auto_set_desktop_background":true,"expected_attendance":50,"attendance_enabled":false}')
                     
             else:
                 sys.exit()
@@ -185,8 +193,13 @@ class Main():
             MessageBoxModern(parent=None,title='警告',text=f"{traceback.format_exc()}",text_blod='读取历史记录文件失败,不影响运行.',icon='warning',)
             self.previous_homework = {}
 
-
-
+        try:
+            with open('homeworktool_attendance.json', 'r', encoding='utf-8') as f:
+                self.attendance_history = json.load(f)
+            if not isinstance(self.attendance_history, dict):
+                self.attendance_history = {}
+        except Exception:
+            self.attendance_history = {}
 
         self.load_runtime_settings()
         
@@ -268,6 +281,14 @@ class Main():
 
         self.auto_set_desktop_background = bool(self.settings.get('auto_set_desktop_background', True))
 
+        try:
+            self.expected_attendance = int(self.settings.get('expected_attendance', 50))
+        except Exception:
+            self.expected_attendance = 50
+        self.settings['expected_attendance'] = self.expected_attendance
+        self.attendance_enabled = bool(self.settings.get('attendance_enabled', False))
+        self.settings['attendance_enabled'] = self.attendance_enabled
+
         font_setting = self.settings.get('YAHEI_TEXT_FONT', ['微软雅黑', 12])
         YAHEI_TEXT_FONT = font_setting
         self.settings['YAHEI_TEXT_FONT'] = font_setting
@@ -324,11 +345,11 @@ class Main():
                 homework_list = self.homework_data.get(subject, [])
                 if not homework_list:
                     continue
-                blocks.append(('subject', f"{subject}:", None, False))
+                blocks.append(('subject', f"{subject}:", None, False, False))
                 for index, content in enumerate(homework_list, start=1):
-                    body, style_color, style_bold = parse_homework_style(content)
-                    blocks.append(('content', f"  {index}.{body}", style_color, style_bold))
-                blocks.append(('gap', '', None, False))  # 科目之间的额外间距
+                    body, style_color, style_bold, style_inverse = parse_homework_style(content)
+                    blocks.append(('content', f"  {index}.{body}", style_color, style_bold, style_inverse))
+                blocks.append(('gap', '', None, False, False))  # 科目之间的额外间距
 
             # 使用模块级常量
             margin_x = int(self._cfg('EXPORT_MARGIN_X'))
@@ -534,7 +555,7 @@ class Main():
                 current_col = 'left'
                 y = start_y
 
-                def place_line(text, font, extra_after=0, x_offset=0, style_color=None, style_bold=False):
+                def place_line(text, font, extra_after=0, x_offset=0, style_color=None, style_bold=False, style_inverse=False):
                     nonlocal y, current_col
                     h = text_height(draw_obj, text if text else '中', font)
                     if y + h > max_y:
@@ -545,11 +566,11 @@ class Main():
                             return False
                     base_x = left_x if current_col == 'left' else right_x
                     target = left_items if current_col == 'left' else right_items
-                    target.append((base_x + x_offset, y, text, font, style_color, style_bold))
+                    target.append((base_x + x_offset, y, text, font, style_color, style_bold, style_inverse))
                     y = y + h + extra_after
                     return True
 
-                for kind, text, style_color, style_bold in blocks:
+                for kind, text, style_color, style_bold, style_inverse in blocks:
                     if kind == 'gap':
                         y += subject_gap
                         continue
@@ -561,7 +582,7 @@ class Main():
                         lines = [(line, 0) for line in wrap_plain(draw_obj, text, font, col_width)]
                     for i, (line, x_off) in enumerate(lines):
                         after = spacing_after if i == len(lines) - 1 else max(2, line_spacing_content // 2)
-                        if not place_line(line, font, after, x_off, style_color, style_bold):
+                        if not place_line(line, font, after, x_off, style_color, style_bold, style_inverse):
                             return False, None, None
                 return True, left_items, right_items
 
@@ -618,6 +639,48 @@ class Main():
             # 日期居中（缺字回退）
             draw_text_mixed(draw, (center_x, date_y), date, text_color, font_date, anchor='mt')
 
+            # 自习考勤：标题居中后,在标题右侧单行黑底白字（字号取 EXPORT_FONT_ATTENDANCE）
+            try:
+                att_on = False
+                try:
+                    att_on = bool(self.var_attendance_enabled.get())
+                except Exception:
+                    att_on = bool(getattr(self, 'attendance_enabled', False))
+                if att_on:
+                    exp_n = int(getattr(self, 'expected_attendance', 50) or 50)
+                    act_n = self._get_actual_attendance_from_ui()
+                    self._save_attendance_record(date=date, expected=exp_n, actual=act_n)
+                    att_size = int(self._cfg('EXPORT_FONT_ATTENDANCE', 90) or 90)
+                    if att_size < 12:
+                        att_size = 12
+                    font_att = load_font_chain(att_size)
+                    att_text = f'应到:{exp_n}人  实到:{act_n}人'
+                    tw = text_width(draw, att_text, font_att)
+                    th = text_height(draw, att_text, font_att)
+                    pad_x, pad_y = 20, 12
+                    box_w = tw + pad_x * 2
+                    box_h = th + pad_y * 2
+                    date_w = text_width(draw, date, font_date)
+                    date_h = text_height(draw, date, font_date)
+                    gap_after_title = max(40, size_date // 2)
+                    box_x1 = int(center_x + date_w / 2 + gap_after_title)
+                    margin_right = int(self._cfg('EXPORT_MARGIN_X'))
+                    if box_x1 + box_w > img_width - margin_right:
+                        box_x1 = img_width - margin_right - box_w
+                    box_x2 = box_x1 + box_w
+                    box_cy = date_y + date_h / 2.0
+                    box_y1 = int(box_cy - box_h / 2.0)
+                    if box_y1 < 10:
+                        box_y1 = 10
+                    box_y2 = box_y1 + box_h
+                    draw.rectangle([box_x1, box_y1, box_x2, box_y2], fill=(0, 0, 0), outline=None)
+                    draw_text_mixed(
+                        draw, (box_x1 + pad_x, box_y1 + pad_y),
+                        att_text, (255, 255, 255), font_att,
+                    )
+            except Exception:
+                pass
+
             # 中间灰色虚线（从内容区顶部到底部）
             dash_len, gap_len = 24, 16
             y = start_y - 20
@@ -626,8 +689,29 @@ class Main():
                 draw.line([(center_x, y), (center_x, y2)], fill=divider_color, width=4)
                 y = y2 + gap_len
 
-            for x, y, text, font, style_color, style_bold in (final_left or []) + (final_right or []):
-                fill = style_color if style_color else text_color
+            for item in (final_left or []) + (final_right or []):
+                # 兼容旧 6 元组与新 7 元组
+                if len(item) >= 7:
+                    x, y, text, font, style_color, style_bold, style_inverse = item[:7]
+                else:
+                    x, y, text, font, style_color, style_bold = item[:6]
+                    style_inverse = False
+                if style_inverse:
+                    # 反色：黑底；前景默认白，若有颜色标记则用该颜色
+                    fill = style_color if style_color else (255, 255, 255)
+                    try:
+                        th = text_height(draw, text if text else '中', font)
+                        tw = text_width(draw, text if text else '', font)
+                        pad = 4
+                        draw.rectangle(
+                            [x - pad, y - pad, x + tw + pad, y + th + pad],
+                            fill=(0, 0, 0),
+                            outline=None,
+                        )
+                    except Exception:
+                        pass
+                else:
+                    fill = style_color if style_color else text_color
                 draw_text_mixed(draw, (x, y), text, fill, font, bold=bool(style_bold))
 
             filename = f"./homework_image/{date}.jpg"
@@ -769,28 +853,210 @@ class Main():
         self.button_load_homework_file=DButton(self.root,text='载入历史记录',font=YAHEI_TEXT_FONT,command=self.load_homework_history)
         self.button_load_homework_file.place(x=920,y=260,width=260,height=60)
 
-        self.button_clear_history=DButton(self.root,text='清理历史记录',font=YAHEI_TEXT_FONT,fg=REDTEXTFG,command=self.clear_homework_history)
-        self.button_clear_history.place(x=920,y=340,width=260,height=60)
+        # 自习考勤：两行 —— 勾选 + 实到人数（实到写入考勤历史,不写配置；应到在设置中）
+        self.var_attendance_enabled = tk.BooleanVar(value=bool(getattr(self, 'attendance_enabled', False)))
+        self.checkbutton_attendance = DCheckbutton(
+            self.root,
+            text='自习考勤',
+            variable=self.var_attendance_enabled,
+            command=self._on_attendance_toggle,
+        )
+        self.checkbutton_attendance.place(x=920, y=340, width=260, height=30)
 
-  
+        _exp = int(getattr(self, 'expected_attendance', 50) or 50)
+        if _exp < 0:
+            _exp = 0
+        self.spinbox_attendance = DTouchSpinbox2(
+            self.root, long_press_ms=50, int_only=True, from_=0, to=_exp, increment=1,
+        )
+        # 优先读今日考勤历史中的实到；没有则用设置里的应到人数
+        self.spinbox_attendance.place(x=920, y=380, width=260, height=40)
+        self._load_attendance_into_ui()
+        # 仅勾选时可编辑
+        self._set_attendance_spinbox_state(bool(self.var_attendance_enabled.get()))
 
+        # 「清理历史记录」已移至设置页「账密设置」右侧；主界面其余按钮位置不变
         self.button_exit_app=DButton(self.root,text='关闭程序',font=YAHEI_TEXT_FONT,command=self.exit_app,fg=REDTEXTFG)
-        self.button_exit_app.place(x=920,y=420,width=260,height=60)
-
- 
+        self.button_exit_app.place(x=920,y=520,width=260,height=60)
 
         self.button_settings=DButton(self.root,text='设置',command=self.open_settings_window,)
-        self.button_settings.place(x=920,y=500,width=80,height=30)
+        self.button_settings.place(x=920,y=600,width=80,height=30)
 
         self.button_about=DButton(self.root,text='关于',command=self.about,)
-        self.button_about.place(x=1020,y=500,width=80,height=30)
+        self.button_about.place(x=1020,y=600,width=80,height=30)
 
         ConvertPlaceToRelative(self.root)
 
     def exit_app(self,):
+        # 退出时保存今日实到考勤（若已勾选）
+        try:
+            if bool(self.var_attendance_enabled.get()):
+                self._save_attendance_record()
+        except Exception:
+            pass
         self.save_homework_history(silent=True)
         self.root.destroy()
         sys.exit()
+
+    def _set_attendance_spinbox_state(self, enabled):
+        """考勤 Spinbox：勾选时 normal,未勾选时 disabled."""
+        try:
+            state = 'normal' if enabled else 'disabled'
+            self.spinbox_attendance.config(state=state)
+            try:
+                self.spinbox_attendance.Entry.config(state=state)
+            except Exception:
+                pass
+            try:
+                self.spinbox_attendance.DButton_up.config(state=state)
+                self.spinbox_attendance.DButton_down.config(state=state)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _on_attendance_toggle(self):
+        """主界面自习考勤勾选变化时写入 settings（仅开关,不含实到人数）."""
+        enabled = bool(self.var_attendance_enabled.get())
+        self.attendance_enabled = enabled
+        self.settings['attendance_enabled'] = enabled
+        self._set_attendance_spinbox_state(enabled)
+        self._save_settings_file_quiet()
+
+    def _load_attendance_into_ui(self, date=None):
+        """从考勤历史读取指定日期（默认今日）的实到人数写入主界面 Spinbox；
+        无记录时用设置中的应到人数。
+        """
+        if date is None:
+            date = datetime.datetime.now().strftime('%Y-%m-%d')
+        # 先保证 history 已加载
+        if not isinstance(getattr(self, 'attendance_history', None), dict):
+            self.attendance_history = {}
+            try:
+                with open('homeworktool_attendance.json', 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    self.attendance_history = loaded
+            except Exception:
+                pass
+
+        spin_val = int(getattr(self, 'expected_attendance', 50) or 50)
+        try:
+            rec = self.attendance_history.get(date)
+            if isinstance(rec, dict) and 'actual' in rec:
+                spin_val = int(rec.get('actual'))
+            elif isinstance(rec, (int, float)):
+                spin_val = int(rec)
+        except Exception:
+            spin_val = int(getattr(self, 'expected_attendance', 50) or 50)
+
+        # 写入 Spinbox（即使当前 disabled 也要先 normal 再写回状态）
+        was_on = False
+        try:
+            was_on = bool(self.var_attendance_enabled.get())
+        except Exception:
+            was_on = bool(getattr(self, 'attendance_enabled', False))
+        try:
+            self.spinbox_attendance.config(state='normal')
+            try:
+                self.spinbox_attendance.Entry.config(state='normal')
+            except Exception:
+                pass
+            self.spinbox_attendance.delete(0, tk.END)
+            self.spinbox_attendance.insert(0, str(int(spin_val)))
+        except Exception:
+            try:
+                self.spinbox_attendance.delete(0, tk.END)
+                self.spinbox_attendance.insert(0, str(int(spin_val)))
+            except Exception:
+                pass
+        self._set_attendance_spinbox_state(was_on)
+
+    def _get_actual_attendance_from_ui(self):
+        """读取主界面实到人数 Spinbox,失败返回 0；允许负数；disabled 时也能读."""
+        val = 0
+        try:
+            # disabled 状态下部分控件 get 可能异常,临时打开再读
+            was_disabled = False
+            try:
+                st = str(self.spinbox_attendance.cget('state'))
+                was_disabled = st in ('disabled', 'Disable', 'DISABLED')
+            except Exception:
+                was_disabled = False
+            if was_disabled:
+                try:
+                    self.spinbox_attendance.config(state='normal')
+                    try:
+                        self.spinbox_attendance.Entry.config(state='normal')
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            try:
+                val = int(float(self.spinbox_attendance.get()))
+            except Exception:
+                try:
+                    val = int(float(self.spinbox_attendance.Entry.get()))
+                except Exception:
+                    val = 0
+            if was_disabled:
+                self._set_attendance_spinbox_state(False)
+        except Exception:
+            val = 0
+        return val
+
+    def _save_attendance_record(self, date=None, expected=None, actual=None):
+        """将当日应到/实到写入 homeworktool_attendance.json（按日期为键,与作业历史类似）."""
+        if date is None:
+            date = datetime.datetime.now().strftime('%Y-%m-%d')
+        if expected is None:
+            try:
+                expected = int(getattr(self, 'expected_attendance', 50) or 50)
+            except Exception:
+                expected = 50
+        if actual is None:
+            actual = self._get_actual_attendance_from_ui()
+        try:
+            expected = int(expected)
+        except Exception:
+            expected = 50
+        try:
+            actual = int(actual)
+        except Exception:
+            actual = 0
+
+        history = {}
+        try:
+            if isinstance(getattr(self, 'attendance_history', None), dict):
+                history = dict(self.attendance_history)
+        except Exception:
+            history = {}
+        try:
+            with open('homeworktool_attendance.json', 'r', encoding='utf-8') as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                history = loaded
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            pass
+
+        history[date] = {
+            'expected': expected,
+            'actual': actual,
+        }
+        self.attendance_history = history
+        try:
+            with open('homeworktool_attendance.json', 'w', encoding='utf-8') as f:
+                json.dump(history, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception:
+            return False
+
+    def _save_settings_file_quiet(self):
+        try:
+            with open('homeworktool_settings.json', 'w', encoding='utf-8') as f:
+                json.dump(self.settings, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     def get_subject_password(self, subject):
         """获取科目对应密码;无独立条目时回退 default"""
@@ -1503,9 +1769,10 @@ class Main():
         # 填充候选词（科目已固定）
         def toggle_style_marker(letter):
             """在作业末尾切换样式字母.
-            - O：有则删、无则加（可与一个颜色共存）
+            - O：加粗，有则删、无则加（可与颜色、反色共存）
+            - F：反色（黑底，前景默认白），有则删、无则加（可与颜色、加粗共存）
             - R/G/Y/B：末尾只允许一个颜色；点新颜色会替换旧颜色；再点同一颜色则去掉
-            只处理末尾连续的 RGYBO.
+            只处理末尾连续的 RGYBOF.
             """
             if edit_entry[0] is None:
                 win32api.MessageBeep()
@@ -1528,25 +1795,32 @@ class Main():
                     markers = [m for m in markers if m != 'O']
                 else:
                     markers.append('O')
+            elif letter == 'F':
+                if 'F' in markers:
+                    markers = [m for m in markers if m != 'F']
+                else:
+                    markers.append('F')
             elif letter in color_letters:
                 if letter in markers:
-                    # 再点同一颜色 → 去掉该颜色，保留 O
+                    # 再点同一颜色 → 去掉该颜色，保留 O/F
                     markers = [m for m in markers if m != letter]
                 else:
-                    # 换新颜色：去掉所有旧颜色，保留 O，再追加本颜色
+                    # 换新颜色：去掉所有旧颜色，保留 O/F，再追加本颜色
                     markers = [m for m in markers if m not in color_letters]
                     markers.append(letter)
             else:
-                # 非预期字母，忽略
                 return
 
-            # 规范化顺序：颜色在前、O 在后，且最多各一个
+            # 规范化顺序：颜色 → F → O，且各最多一个
             has_o = 'O' in markers
+            has_f = 'F' in markers
             colors = [m for m in markers if m in color_letters]
             color = colors[-1] if colors else None
             tail = ''
             if color:
                 tail += color
+            if has_f:
+                tail += 'F'
             if has_o:
                 tail += 'O'
             new_s = body + tail
@@ -1581,13 +1855,14 @@ class Main():
         except Exception:
             pass
 
-        # 程序级样式标记：R红 G深绿 Y深黄 B天蓝 O加粗（插在配置候选词之后）
+        # 程序级样式标记：R红 G深绿 Y深黄 B天蓝 O加粗 F反色（插在配置候选词之后）
         style_btns = [
             ('R', REDTEXTFG),
             ('G', GREENLIGHT),
             ('Y', YELLOWTEXTFG),
             ('B', HIGHLIGHT),
             ('O', TEXTFG),
+            ('F', TEXTFG),  # 反色：黑底，前景默认白
         ]
         for letter, fg in style_btns:
             try:
@@ -1846,6 +2121,17 @@ class Main():
         """将当前作业保存到历史记录.成功时不弹窗,按钮短暂显示「成功」."""
         try:
             date = datetime.datetime.now().strftime('%Y-%m-%d')
+            # 同步写入当日考勤历史（勾选自习考勤时）
+            try:
+                att_on = False
+                try:
+                    att_on = bool(self.var_attendance_enabled.get())
+                except Exception:
+                    att_on = bool(getattr(self, 'attendance_enabled', False))
+                if att_on:
+                    self._save_attendance_record(date=date)
+            except Exception:
+                pass
 
             history = {}
             try:
@@ -1891,7 +2177,7 @@ class Main():
         if not self.verify_admin_password():
             return
         confirm = MessageBoxModern(
-            parent=self.root,
+            parent=self.window_settings,
             title='警告',
             icon='warning',
             text_blod='清理历史记录',
@@ -1907,7 +2193,7 @@ class Main():
                 json.dump({}, f, ensure_ascii=False, indent=2)
             self.previous_homework = {}
             MessageBoxModern(
-                parent=self.root,
+                parent=self.window_settings,
                 title='成功',
                 icon='correct',
                 text_blod='清理完成',
@@ -1915,7 +2201,7 @@ class Main():
             )
         except Exception:
             MessageBoxModern(
-                parent=self.root,
+                parent=self.window_settings,
                 title='错误',
                 icon='error',
                 text_blod='清理历史记录失败',
@@ -2135,7 +2421,9 @@ class Main():
 
 
     def _open_import_homework_window(self, target_date, target_homework, subjects):
-        """导入选项：每个科目一个勾选 + 合并策略下拉。"""
+        """导入选项：表格列出科目及其每条作业,默认全不勾选.
+        勾选科目 = 导入该科全部作业;否则只导入勾选的作业项.
+        """
         MERGE_OPTIONS = ['合并', '直接覆盖']
 
         def close_win(event=None):
@@ -2151,7 +2439,7 @@ class Main():
         win = tk.Toplevel(self.root)
         win.title(f'导入历史记录 日期「{target_date}」')
         SetDarkTitleBar(win)
-        w, h = 620, 510
+        w, h = 720, 560
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
         win.geometry('%dx%d+%d+%d' % (w, h, (sw - w) // 2, (sh - h) // 2))
         win['bg'] = WINDOWBG
@@ -2161,11 +2449,22 @@ class Main():
 
         tk.Label(
             win, bg=WINDOWBG, fg=TEXTFG, anchor='w',
-            text=f'选择要导入的科目与合并方式.  (日期「{target_date}」)',
+            text=f'勾选要导入的科目或作业（默认全不选）.  日期「{target_date}」',
             font=YAHEI_TEXT_FONT,
-        ).place(x=20, y=20, width=600, height=30)
+        ).place(x=20, y=15, width=500, height=30)
 
-        # 外层 Text 作为可滚动容器（样式与程序内其他 Text 一致）
+        # 全局合并策略
+        tk.Label(win, bg=WINDOWBG, fg=TEXTFG, text='合并方式:', anchor='e').place(x=480, y=15, width=80, height=30)
+        combo_global = DCombobutton(win, values=MERGE_OPTIONS, state='readonly')
+        try:
+            combo_global['state'] = 'normal'
+            combo_global.delete(0, tk.END)
+            combo_global.insert(0, MERGE_OPTIONS[0])
+            combo_global['state'] = 'readonly'
+        except Exception:
+            pass
+        combo_global.place(x=560, y=15, width=120, height=30)
+
         text_box = tk.Text(
             win, bd=0, highlightthickness=0, bg=WIDGETBG, fg=TEXTFG,
             font='TkDefaultFont',
@@ -2174,77 +2473,113 @@ class Main():
             selectforeground=TEXTFG, selectbackground=HIGHLIGHT,
             cursor='arrow',
         )
-        text_box.place(x=20, y=60, width=560, height=380)
+        text_box.place(x=20, y=55, width=660, height=440)
         SetBorder(text_box)
         scroll = DScrollbar(win, bg=WINDOWBG, command=text_box.yview)
-        scroll.place(x=580, y=60, width=20, height=380)
+        scroll.place(x=680, y=55, width=20, height=440)
         text_box.config(yscrollcommand=scroll.set)
 
-        # 每科目：Frame + DCheckbutton + DCombobutton
-        row_vars = {}  # subject -> (BoolVar, StringVar / combobutton)
+        # subject -> {'subj_var': BoolVar, 'items': [(text, BoolVar), ...]}
+        row_data = {}
+
+        def _on_subject_toggle(subject):
+            """勾选科目时勾选其下全部作业;取消科目时取消全部作业."""
+            info = row_data.get(subject)
+            if not info:
+                return
+            val = bool(info['subj_var'].get())
+            for _txt, ivar in info['items']:
+                try:
+                    ivar.set(val)
+                except Exception:
+                    pass
+
+        def _on_item_toggle(subject):
+            """若全部子项勾选则勾选科目;若有未勾选则取消科目勾选."""
+            info = row_data.get(subject)
+            if not info or not info['items']:
+                return
+            all_on = all(bool(iv.get()) for _t, iv in info['items'])
+            try:
+                # 避免递归触发科目 command 再改子项：仅同步科目框显示
+                info['subj_var'].set(all_on)
+            except Exception:
+                pass
 
         for subject in subjects:
-            hist_items = target_homework.get(subject) or []
+            hist_items = list(target_homework.get(subject) or [])
+            if not hist_items:
+                continue
             cur_items = list(self.homework_data.get(subject, []) or [])
             tip = f'历史{len(hist_items)}条 / 当前{len(cur_items)}条'
 
-            frame = tk.Frame(text_box, bg=WINDOWBG, bd=0, highlightthickness=0, width=520, height=60)
-            frame.pack_propagate(False)
-            # Text 内嵌：与其他控件间距约 20
-            text_box.window_create('end', window=frame, padx=20, pady=10)
+            # 科目行
+            frame_subj = tk.Frame(text_box, bg=WINDOWBG, bd=0, highlightthickness=0)
+            text_box.window_create('end', window=frame_subj, padx=10, pady=6)
             text_box.insert('end', '\n')
 
-            var_check = tk.BooleanVar(value=True)
-            chk = DCheckbutton(
-                frame, text=f'{subject}  ({tip})',
-                variable=var_check,
+            subj_var = tk.BooleanVar(value=False)  # 默认不勾选
+            chk_subj = DCheckbutton(
+                frame_subj,
+                text=f'{subject}  ({tip})',
+                variable=subj_var,
+                command=lambda s=subject: _on_subject_toggle(s),
             )
-            chk.pack(padx=[10,5],pady=10,fill='x',side='left')#x=0, y=4, width=280, height=32)
+            chk_subj.pack(side='left', padx=10, pady=6)
 
-            combo = DCombobutton(
-                frame, values=MERGE_OPTIONS, state='readonly',
-            )
-            combo['state']='normal'
+            items_vars = []
+            for hw in hist_items:
+                frame_item = tk.Frame(text_box, bg=WIDGETBG, bd=0, highlightthickness=0)
+                text_box.window_create('end', window=frame_item, padx=10, pady=2)
+                text_box.insert('end', '\n')
+                # 缩进占位
+                tk.Label(frame_item, bg=WIDGETBG, width=4, text='').pack(side='left')
+                item_var = tk.BooleanVar(value=False)  # 默认不勾选
+                display = hw if len(hw) <= 60 else (hw[:57] + '...')
+                chk_item = DCheckbutton(
+                    frame_item,
+                    text=display,
+                    variable=item_var,
+                    command=lambda s=subject: _on_item_toggle(s),
+                )
+                chk_item.pack(side='left', padx=6, pady=2, fill='x')
+                items_vars.append((hw, item_var))
 
-            combo.delete(0, tk.END)
-            combo.insert(0, MERGE_OPTIONS[0])
-
-            combo['state']='readonly'
-            
-        
-            # 右侧下拉，与左侧勾选间距 20
-            combo.pack(padx=[5,10],pady=10,fill='x',side='right')#.place(x=300, y=4, width=200, height=32)
-
-            row_vars[subject] = (var_check, combo)
-
+            row_data[subject] = {'subj_var': subj_var, 'items': items_vars}
 
         text_box.config(state='disabled')
 
         def do_import():
-            imported_any = False
-            for subject, (var_check, combo) in row_vars.items():
-                if not var_check.get():
-                    continue
+            # 全局合并方式
+            try:
+                mode = combo_global.Entry.get().strip()
+            except Exception:
                 try:
-                    mode = combo.Entry.get().strip()
+                    mode = combo_global.get().strip()
                 except Exception:
-                    try:
-                        mode = combo.get().strip()
-                    except Exception:
-                        mode = MERGE_OPTIONS[0]
-                if mode not in MERGE_OPTIONS:
                     mode = MERGE_OPTIONS[0]
+            if mode not in MERGE_OPTIONS:
+                mode = MERGE_OPTIONS[0]
 
-                hist_list = list(target_homework.get(subject) or [])
-                cur_list = list(self.homework_data.get(subject, []) or [])
-
-                if mode == '直接覆盖':
-                    new_list = list(hist_list)
+            imported_any = False
+            for subject, info in row_data.items():
+                hist_all = list(target_homework.get(subject) or [])
+                # 勾选科目 → 全部;否则仅勾选的子项
+                if bool(info['subj_var'].get()):
+                    selected = list(hist_all)
                 else:
-                    # 合并（默认）：当前在前，历史中未出现的条目追加
+                    selected = [txt for txt, iv in info['items'] if bool(iv.get())]
+                if not selected:
+                    continue
+
+                cur_list = list(self.homework_data.get(subject, []) or [])
+                if mode == '直接覆盖':
+                    # 覆盖：仅写入所选条目（不是整科历史）
+                    new_list = list(selected)
+                else:
                     seen = set(cur_list)
                     new_list = list(cur_list)
-                    for item in hist_list:
+                    for item in selected:
                         if item not in seen:
                             new_list.append(item)
                             seen.add(item)
@@ -2257,7 +2592,6 @@ class Main():
                     self.homework_data[subject] = new_list
                 imported_any = True
 
-            # 展开有作业的科目并刷新状态
             for subject in self.homework_data.keys():
                 try:
                     if self.homework_data[subject]:
@@ -2280,14 +2614,14 @@ class Main():
             else:
                 MessageBoxModern(
                     parent=self.root, title='提示', icon='info',
-                    text_blod='未导入任何科目',
-                    text='请至少勾选一个科目后再确定.',
+                    text_blod='未导入任何内容',
+                    text='请至少勾选一个科目或一条作业后再确定.',
                 )
 
         btn_ok = DButton(win, text='确定', default='active', command=do_import)
-        btn_ok.place(x=420, y=460, width=80, height=30)
+        btn_ok.place(x=520, y=510, width=80, height=30)
         btn_cancel = DButton(win, text='取消', command=close_win)
-        btn_cancel.place(x=520, y=460, width=80, height=30)
+        btn_cancel.place(x=620, y=510, width=80, height=30)
 
         try:
             ConvertPlaceToRelative(win)
@@ -2298,6 +2632,8 @@ class Main():
         except Exception:
             pass
         win.wait_window()
+
+
 
     def autoload_homework_histroy(self):
         try:
@@ -2323,8 +2659,18 @@ class Main():
                         self.treeview_homework.item(subject, open=True)
                     self._update_subject_state(subject)
             #MessageBoxModern(parent=self.root, title='提示', text=f'已自动载入今日({date})的作业记录.', text_blod='自动载入历史记录成功', icon='info')
+            # 同步载入今日考勤实到人数到主界面
+            try:
+                self._load_attendance_into_ui(date)
+            except Exception:
+                pass
         except:
             pass  # 静默处理异常,确保即使自动加载失败也不影响程序正常启动
+        # 无论作业是否载入成功,都尝试把今日考勤写入主界面
+        try:
+            self._load_attendance_into_ui()
+        except Exception:
+            pass
 
     def apply_homework_template(self,):
         # 默认九科（保证绝对顺序）
@@ -2480,10 +2826,10 @@ class Main():
 
         window_settings = tk.Toplevel(self.root)
         self.window_settings=window_settings
-        window_settings.title("软件全局设置")
+        window_settings.title("全局设置")
         SetDarkTitleBar(window_settings)
         width = 920
-        height = 550
+        height = 590
         screenwidth = window_settings.winfo_screenwidth()
         screenheight = window_settings.winfo_screenheight()
         geometry = '%dx%d+%d+%d' % (width, height, (screenwidth - width) / 2, (screenheight - height) / 2)
@@ -2511,36 +2857,54 @@ class Main():
         )
         checkbutton_auto_set_desktop_background.place(x=20, y=60, height=30)
 
-        tk.Label(window_settings, bg=TEXTBG).place(x=20, y=110, width=880, height=2)
+        tk.Label(
+            window_settings, bg=WINDOWBG, fg=TEXTFG, text='应到人数:', anchor='w',
+        ).place(x=20, y=100, width=90, height=30)
+        spinbox_expected_attendance = DSpinbox(
+            window_settings, int_only=True, from_=float('-inf'), to=float('inf'), increment=1,
+        )
+        try:
+            spinbox_expected_attendance.delete(0, tk.END)
+            spinbox_expected_attendance.insert(
+                0, str(int(getattr(self, 'expected_attendance', 50)))
+            )
+        except Exception:
+            try:
+                spinbox_expected_attendance.insert(0, '50')
+            except Exception:
+                pass
+        spinbox_expected_attendance.place(x=110, y=100, width=120, height=30)
 
-        tk.Label(window_settings, bg=WINDOWBG, fg=TEXTFG, text='科目设定:', anchor='w').place(x=20, y=130, height=30)
+        tk.Label(window_settings, bg=TEXTBG).place(x=20, y=150, width=880, height=2)
+
+        tk.Label(window_settings, bg=WINDOWBG, fg=TEXTFG, text='科目设定:', anchor='w').place(x=20, y=170, height=30)
         listbox_subject = tk.Listbox(
             window_settings, bd=0, bg=TEXTBG, highlightthickness=0, fg=TEXTFG,
             activestyle='none', selectmode='browse', exportselection=0,
             selectbackground=AlphaBlend(HIGHLIGHT, TEXTBG, 0.5), selectforeground=TEXTFG,
         )
-        listbox_subject.place(x=20, y=170, width=120, height=310)
+        listbox_subject.place(x=20, y=210, width=120, height=310)
         scrollber_y_listbox_subject = DScrollbar(window_settings, command=listbox_subject.yview)
-        scrollber_y_listbox_subject.place(x=140, y=170, width=20, height=310)
+        scrollber_y_listbox_subject.place(x=140, y=210, width=20, height=310)
         listbox_subject.config(yscrollcommand=scrollber_y_listbox_subject.set)
 
         button_add_subject = DButton(window_settings, text='\uF164', font=self.font_icon)
-        button_add_subject.place(x=180, y=170, width=30, height=30)  # 不允许与程序内的默认科目重名.
+        button_add_subject.place(x=180, y=210, width=30, height=30)  # 不允许与程序内的默认科目重名.
         BindTipWindow(button_add_subject, text='新增科目')
 
         button_rename_subject = DButton(window_settings, text='\uED63', font=self.font_icon)
-        button_rename_subject.place(x=180, y=220, width=30, height=30)
+        button_rename_subject.place(x=180, y=260, width=30, height=30)
         # 不允许重命名程序内的默认科目.点击保存配置按钮之后要同步更改程序内数据和三个外部文件的数据,但不更改过去的作业历史记录
         BindTipWindow(button_rename_subject, text='重命名科目(默认九科不可改)')
 
         button_remove_subject = DButton(window_settings, text='\uF166', font=self.font_icon)
-        button_remove_subject.place(x=180, y=270, width=30, height=30)  # 不允许删除程序内的默认科目.点击删除按钮的时候要弹窗疑问.
+        button_remove_subject.place(x=180, y=310, width=30, height=30)  # 不允许删除程序内的默认科目.点击删除按钮的时候要弹窗疑问.
         BindTipWindow(button_remove_subject, text='删除科目(默认九科不可删)')
 
 
 
 
-        tk.Label(window_settings, bg=TEXTBG).place(x=230, y=130, width=2, height=350)
+        tk.Label(window_settings, bg=TEXTBG).place(x=230, y=170, width=2, height=350)
 
 
 
@@ -2548,7 +2912,7 @@ class Main():
 
 
 
-        tk.Label(window_settings, bg=WINDOWBG, fg=TEXTFG, text='选中的科目相关设定(每行一项,直接编辑):', anchor='w').place(x=250, y=130, height=30)
+        tk.Label(window_settings, bg=WINDOWBG, fg=TEXTFG, text='选中的科目相关设定(每行一项,直接编辑):', anchor='w').place(x=250, y=170, height=30)
 
         def _make_settings_text(parent):
             """样式参考 MCLangTool 主文本框."""
@@ -2560,39 +2924,42 @@ class Main():
             SetBorder(t)
             return t
 
-        tk.Label(window_settings, bg=WINDOWBG, fg=TEXTFG, text='作业:', anchor='w').place(x=250, y=170, height=30)
+        tk.Label(window_settings, bg=WINDOWBG, fg=TEXTFG, text='作业:', anchor='w').place(x=250, y=210, height=30)
         text_homework = _make_settings_text(window_settings)
-        text_homework.place(x=250, y=210, width=250, height=270)
+        text_homework.place(x=250, y=250, width=250, height=270)
         scrollber_y_text_homework = DScrollbar(window_settings, command=text_homework.yview, bg=WINDOWBG)
-        scrollber_y_text_homework.place(x=500, y=210, width=20, height=270)
+        scrollber_y_text_homework.place(x=500, y=250, width=20, height=270)
         text_homework.config(yscrollcommand=scrollber_y_text_homework.set)
 
-        tk.Label(window_settings, bg=WINDOWBG, fg=TEXTFG, text='量词候选词:', anchor='w').place(x=540, y=170, height=30)
+        tk.Label(window_settings, bg=WINDOWBG, fg=TEXTFG, text='量词候选词:', anchor='w').place(x=540, y=210, height=30)
         text_measure_word = _make_settings_text(window_settings)
-        text_measure_word.place(x=540, y=210, width=150, height=270)
+        text_measure_word.place(x=540, y=250, width=150, height=270)
         scrollber_y_text_measure_word = DScrollbar(window_settings, command=text_measure_word.yview, bg=WINDOWBG)
-        scrollber_y_text_measure_word.place(x=690, y=210, width=20, height=270)
+        scrollber_y_text_measure_word.place(x=690, y=250, width=20, height=270)
         text_measure_word.config(yscrollcommand=scrollber_y_text_measure_word.set)
 
-        tk.Label(window_settings, bg=WINDOWBG, fg=TEXTFG, text='其它候选词:', anchor='w').place(x=730, y=170, height=30)
+        tk.Label(window_settings, bg=WINDOWBG, fg=TEXTFG, text='其它候选词:', anchor='w').place(x=730, y=210, height=30)
         text_other_word = _make_settings_text(window_settings)
-        text_other_word.place(x=730, y=210, width=150, height=270)
+        text_other_word.place(x=730, y=250, width=150, height=270)
         scrollber_y_text_other_word = DScrollbar(window_settings, command=text_other_word.yview, bg=WINDOWBG)
-        scrollber_y_text_other_word.place(x=880, y=210, width=20, height=270)
+        scrollber_y_text_other_word.place(x=880, y=250, width=20, height=270)
         text_other_word.config(yscrollcommand=scrollber_y_text_other_word.set)
 
         button_advanced = DButton(window_settings, text='高级设置', command=lambda: self.open_advanced_settings_window(window_settings))
-        button_advanced.place(x=20, y=500, width=100, height=30)
+        button_advanced.place(x=20, y=540, width=100, height=30)
 
         button_password_control=DButton(window_settings,text='账密设置',command=self.password_control)
-        button_password_control.place(x=140,y=500,width=100,height=30)
+        button_password_control.place(x=140,y=540,width=100,height=30)
+
+        button_clear_history=DButton(window_settings,text='清理历史记录',fg=REDTEXTFG,command=self.clear_homework_history)
+        button_clear_history.place(x=260,y=540,width=120,height=30)
 
         button_ok = DButton(window_settings, text='确定', default='active')
-        button_ok.place(x=720, y=500, width=80, height=30)
+        button_ok.place(x=720, y=540, width=80, height=30)
         button_ok.unbind_default_active()
 
         button_cancel = DButton(window_settings, text='取消', command=close_window_settings)
-        button_cancel.place(x=820, y=500, width=80, height=30)
+        button_cancel.place(x=820, y=540, width=80, height=30)
         button_cancel.unbind_default_active()
 
         # ---------- 辅助 ----------
@@ -2814,6 +3181,38 @@ class Main():
             self.auto_set_desktop_background = bool(var_checkbutton_auto_set_desktop_background.get())
             self.settings['disable_highdpi_scaling'] = self.disable_highdpi_scaling
             self.settings['auto_set_desktop_background'] = self.auto_set_desktop_background
+            try:
+                exp = int(float(spinbox_expected_attendance.get()))
+            except Exception:
+                exp = int(getattr(self, 'expected_attendance', 50) or 50)
+            if exp < 0:
+                exp = 0
+            self.expected_attendance = exp
+            self.settings['expected_attendance'] = exp
+            # 同步主界面实到 Spinbox 上限为新的应到人数（最小仍为 0）
+            try:
+                if hasattr(self, 'spinbox_attendance') and self.spinbox_attendance.winfo_exists():
+                    self.spinbox_attendance.from_ = 0
+                    self.spinbox_attendance.to = max(0, int(exp))
+                    try:
+                        cur = int(float(self.spinbox_attendance.get() or 0))
+                    except Exception:
+                        cur = 0
+                    if cur > exp:
+                        was_on = False
+                        try:
+                            was_on = bool(self.var_attendance_enabled.get())
+                        except Exception:
+                            was_on = bool(getattr(self, 'attendance_enabled', False))
+                        try:
+                            self.spinbox_attendance.config(state='normal')
+                            self.spinbox_attendance.delete(0, tk.END)
+                            self.spinbox_attendance.insert(0, str(int(exp)))
+                        except Exception:
+                            pass
+                        self._set_attendance_spinbox_state(was_on)
+            except Exception:
+                pass
 
             # 2) 应用科目删除到内存树与 homework_data
             for subj in list(removed_subjects):
@@ -2934,6 +3333,7 @@ class Main():
         # 使用 DSpinbox 的数值型键
         SPINBOX_KEYS = {
             'EXPORT_FONT_SUBJECT', 'EXPORT_FONT_CONTENT', 'EXPORT_FONT_DATE',
+            'EXPORT_FONT_ATTENDANCE',
             'EXPORT_FONT_SUBJECT_MIN', 'EXPORT_FONT_CONTENT_MIN',
             'EXPORT_LINE_SPACING_CONTENT', 'EXPORT_LINE_SPACING_SUBJECT', 'EXPORT_SUBJECT_GAP',
             'EXPORT_MARGIN_X', 'EXPORT_MARGIN_BOTTOM', 'EXPORT_DATE_Y',
