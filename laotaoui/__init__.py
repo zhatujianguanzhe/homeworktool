@@ -1,6 +1,7 @@
 #2026-04-30 23:20
 
 import tkinter as tk
+import math
 import tkinter.ttk as ttk
 import tkinter.font as tkfont
 import ctypes,winreg,win32api,win32con,win32gui,os,playsound,pathlib,threading,math,subprocess
@@ -77,7 +78,7 @@ TITLEBAR_INACTIVE='#2B2B2B'
 
 
 
-if IsDarkMode():
+if  IsDarkMode() or 1==1:
     TITLEBARBG='#000000'
     WINDOWBG='#202020'
     TEXTFG="#f1f1f1"
@@ -214,44 +215,51 @@ def SetParent(parent,child):
 
 def SetExpandedTreeviewRowColor(widget, color1=WIDGETBG, color2=TEXTBG, fore_color=TEXTFG):
     """
-    为Treeview设置交替行颜色（仅针对可见/已展开的行）
-    :param widget: Treeview实例
-    :param color1: 奇数行背景色 (默认WIDGETBG)
-    :param color2: 偶数行背景色 (默认TEXTBG)
+    为Treeview / DTreeview 设置交替行颜色（仅针对可见/已展开的行）
     """
-    # 1. 定义两个标签并配置颜色
-    widget.tag_configure('odd_row', background=color1, foreground=fore_color)
-    widget.tag_configure('even_row', background=color2, foreground=fore_color)
-    
-    # 2. 递归获取所有可见（已展开）的节点
+    try:
+        widget.tag_configure('odd_row', background=color1, foreground=fore_color)
+        widget.tag_configure('even_row', background=color2, foreground=fore_color)
+    except Exception:
+        pass
+
     def get_visible_items(parent=''):
         items = []
-        for child in widget.get_children(parent):
+        try:
+            children = widget.get_children(parent)
+        except Exception:
+            return items
+        for child in children:
             items.append(child)
-            # 只有当子节点展开时才递归获取
-            if widget.item(child, 'open'):
+            try:
+                opened = widget.item(child, 'open')
+            except Exception:
+                opened = False
+            if opened:
                 items.extend(get_visible_items(child))
         return items
-    
-    # 3. 获取所有可见节点
+
     visible_items = get_visible_items()
-    
-    # 4. 遍历所有可见节点，按视觉顺序分配标签
     for index, item in enumerate(visible_items):
-        # index 为偶数 -> even_row, index 为奇数 -> odd_row
         tag = 'even_row' if index % 2 == 0 else 'odd_row'
-        
-        # 获取该节点原有的 tags (避免覆盖其他状态标签)
-        current_tags = widget.item(item, 'tags')
+        try:
+            current_tags = widget.item(item, 'tags')
+        except Exception:
+            current_tags = ()
         if isinstance(current_tags, str):
-            current_tags = (current_tags,)
-            
-        # 移除旧的颜色标签 (防止重复调用时标签叠加)
+            current_tags = (current_tags,) if current_tags else ()
         new_tags = [t for t in current_tags if t not in ('odd_row', 'even_row')]
         new_tags.append(tag)
-        
-        # 重新设置 tags
-        widget.item(item, tags=tuple(new_tags))
+        try:
+            widget.item(item, tags=tuple(new_tags))
+        except Exception:
+            pass
+    # DTreeview：刷新绘制
+    try:
+        if hasattr(widget, 'redraw'):
+            widget.redraw()
+    except Exception:
+        pass
 
 
 def GetWorkArea():
@@ -3093,6 +3101,2014 @@ class DSpinbox(tk.Frame):
                 self.down_number(beep=False)
 
 
+
+
+
+
+class DTouchSpinbox(DSpinbox):
+    """
+    在 DSpinbox 基础上增加「长按弹出滚轮列表」：
+    - 长按弹出列表（边框用 SetBorder）
+    - 固定 5 行，选中项始终居中
+    - 按住滑动选择，松手写入数值
+    - 打开时从控件当前值开始，而不是从 0
+    """
+    def __init__(self, master, int_only=True, increment=1,
+                 from_=-float('inf'), to=float('inf'),
+                 long_press_ms=350, visible_rows=5, **kw):
+        super().__init__(master, int_only=int_only, increment=increment,
+                         from_=from_, to=to, **kw)
+        self._long_press_ms = int(long_press_ms)
+        self._visible_rows = 5
+        self._press_after = None
+        self._picker = None
+        self._listbox = None
+        self._values = []
+        self._pad = self._visible_rows // 2
+        self._sel_vidx = 0  # 当前选中的真实数值下标（权威来源）
+        self._drag_last_y = None
+        self._drag_accum = 0  # 像素累计，避免一次跳太多
+        self._press_active = False
+        self._picker_open = False
+
+        for w in (self.Entry, self):
+            w.bind('<ButtonPress-1>', self._on_press, add='+')
+            w.bind('<ButtonRelease-1>', self._on_release, add='+')
+            w.bind('<B1-Motion>', self._on_drag, add='+')
+        try:
+            self.DButton_up.bind('<ButtonPress-1>', self._on_press, add='+')
+            self.DButton_up.bind('<ButtonRelease-1>', self._on_release, add='+')
+            self.DButton_up.bind('<B1-Motion>', self._on_drag, add='+')
+            self.DButton_down.bind('<ButtonPress-1>', self._on_press, add='+')
+            self.DButton_down.bind('<ButtonRelease-1>', self._on_release, add='+')
+            self.DButton_down.bind('<B1-Motion>', self._on_drag, add='+')
+        except Exception:
+            pass
+
+    def _read_current_value(self):
+        """读取 Entry 当前数值；失败则回落到 from_ 与 0 的合理值。"""
+        raw = ''
+        try:
+            raw = self.Entry.get().strip()
+        except Exception:
+            try:
+                raw = self.get().strip()
+            except Exception:
+                raw = ''
+        if raw in ('', '-', '.', '-.'):
+            try:
+                lo = self.from_
+                if lo not in (float('-inf'), float('inf')):
+                    return int(lo) if self.int_only else float(lo)
+            except Exception:
+                pass
+            return 0
+        try:
+            return int(float(raw)) if self.int_only else float(raw)
+        except Exception:
+            return 0
+
+    def _on_press(self, event=None):
+        if getattr(self, '_state', 'normal') == 'disabled':
+            return
+        self._press_active = True
+        self._drag_last_y = event.y_root if event is not None else None
+        self._drag_accum = 0
+        self._cancel_press_timer()
+        try:
+            self._press_after = self.after(self._long_press_ms, self._open_picker)
+        except Exception:
+            self._press_after = None
+
+    def _cancel_press_timer(self):
+        if self._press_after is not None:
+            try:
+                self.after_cancel(self._press_after)
+            except Exception:
+                pass
+            self._press_after = None
+
+    def _on_release(self, event=None):
+        self._press_active = False
+        self._cancel_press_timer()
+        if self._picker_open:
+            self._commit_and_close()
+        self._drag_last_y = None
+        self._drag_accum = 0
+
+    def _on_drag(self, event):
+        if not self._picker_open or self._listbox is None:
+            if self._press_after is not None and self._drag_last_y is not None:
+                if abs(event.y_root - self._drag_last_y) > 24:
+                    self._cancel_press_timer()
+            self._drag_last_y = event.y_root
+            return
+        if self._drag_last_y is None:
+            self._drag_last_y = event.y_root
+            self._drag_accum = 0
+            return
+        dy = event.y_root - self._drag_last_y
+        self._drag_last_y = event.y_root
+        self._drag_accum += dy
+        # 每约 22 像素换一行；往下拖减小、往上拖增大（列表仍上小下大）
+        step = int(self._drag_accum / 22)
+        if step != 0:
+            self._drag_accum -= step * 22
+            self._scroll_by(-step)
+
+    def _build_values(self):
+        cur_v = self._read_current_value()
+        inc = self.increment if self.increment else 1
+        lo, hi = self.from_, self.to
+        finite = (
+            lo not in (float('inf'), float('-inf'))
+            and hi not in (float('inf'), float('-inf'))
+            and abs(hi - lo) / max(abs(inc), 1e-9) <= 2000
+        )
+        values = []
+        if finite:
+            v = lo
+            guard = 0
+            while v <= hi + 1e-9 and guard < 5000:
+                values.append(int(round(v)) if self.int_only else v)
+                v = v + inc
+                guard += 1
+        else:
+            half = 50
+            start = cur_v - half * inc
+            for i in range(half * 2 + 1):
+                v = start + i * inc
+                if lo not in (float('-inf'),) and v < lo:
+                    continue
+                if hi not in (float('inf'),) and v > hi:
+                    continue
+                values.append(int(round(v)) if self.int_only else v)
+            if not values:
+                values = [int(cur_v) if self.int_only else cur_v]
+
+        seen = set()
+        uniq = []
+        for v in values:
+            key = int(v) if self.int_only else float(v)
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(v)
+        self._values = uniq
+        return uniq
+
+    def _nearest_index(self, values, cur_v):
+        if not values:
+            return 0
+        best_i, best_d = 0, abs(float(values[0]) - float(cur_v))
+        for i, v in enumerate(values):
+            d = abs(float(v) - float(cur_v))
+            if d < best_d:
+                best_i, best_d = i, d
+        return best_i
+
+    def _value_index_to_list_index(self, value_idx):
+        return int(value_idx) + self._pad
+
+    def _center_on_vidx(self, vidx):
+        """按真实数值下标选中并滚到正中间。"""
+        lb = self._listbox
+        if lb is None or not self._values:
+            return
+        vidx = max(0, min(len(self._values) - 1, int(vidx)))
+        self._sel_vidx = vidx
+        list_idx = self._value_index_to_list_index(vidx)
+        rows = self._visible_rows
+        mid = rows // 2
+        n = lb.size()
+        top = list_idx - mid
+        top = max(0, min(top, max(0, n - rows)))
+        try:
+            lb.yview_moveto(top / float(max(n, 1)))
+        except Exception:
+            pass
+        try:
+            lb.selection_clear(0, 'end')
+            lb.selection_set(list_idx)
+            lb.activate(list_idx)
+            lb.see(list_idx)
+        except Exception:
+            pass
+
+    def _open_picker(self):
+        if not self._press_active or self._picker_open:
+            return
+        if getattr(self, '_state', 'normal') == 'disabled':
+            return
+
+        # 先读当前控件值，再生成列表，保证起点正确
+        cur_v = self._read_current_value()
+        values = self._build_values()
+        if not values:
+            return
+        sel_i = self._nearest_index(values, cur_v)
+        self._sel_vidx = sel_i
+
+        try:
+            self.update_idletasks()
+            x = self.winfo_rootx()
+            y = self.winfo_rooty() + self.winfo_height() + 4
+            w = max(self.winfo_width(), 80)
+        except Exception:
+            x, y, w = 100, 100, 120
+
+        row_h = 28
+        rows = self._visible_rows
+        h = row_h * rows + 4
+
+        picker = tk.Toplevel(self)
+        picker.overrideredirect(True)
+        picker.resizable(False, False)
+        try:
+            picker.attributes('-topmost', True)
+        except Exception:
+            pass
+        picker.configure(bg=WIDGETBG, bd=0, highlightthickness=0)
+
+        try:
+            sw = picker.winfo_screenwidth()
+            sh = picker.winfo_screenheight()
+            if x + w > sw:
+                x = max(0, sw - w - 4)
+            if y + h > sh:
+                y = max(0, self.winfo_rooty() - h - 4)
+        except Exception:
+            pass
+        picker.geometry(f'{w}x{h}+{x}+{y}')
+
+        try:
+            SetBorder(picker, mode='place', bd=1, focusbd=1, color=BDCOLOR, focuscolor=HIGHLIGHT)
+        except Exception:
+            try:
+                SetBorder(picker, bd=1, focusbd=1, color=BDCOLOR, focuscolor=HIGHLIGHT)
+            except Exception:
+                pass
+
+        lb = tk.Listbox(
+            picker,
+            bd=0, highlightthickness=0,
+            bg=WIDGETBG, fg=TEXTFG,
+            selectbackground=HIGHLIGHT, selectforeground=TEXTFG,
+            activestyle='none',
+            font=('微软雅黑', 14),
+            justify='center',
+            exportselection=0,
+            relief='flat',
+            height=rows,
+        )
+        lb.pack(fill='both', expand=True, padx=1, pady=1)
+
+        pad = self._pad
+        for _ in range(pad):
+            lb.insert('end', '')
+        for v in values:
+            if self.int_only:
+                lb.insert('end', str(int(v)))
+            else:
+                lb.insert('end', ('%g' % float(v)))
+        for _ in range(pad):
+            lb.insert('end', '')
+
+        self._picker = picker
+        self._listbox = lb
+        self._picker_open = True
+        # 弹出后重置拖动基准，避免沿用按下时的坐标造成大跳跃
+        self._drag_last_y = None
+        self._drag_accum = 0
+
+        lb.bind('<B1-Motion>', self._on_drag, add='+')
+        lb.bind('<ButtonRelease-1>', self._on_release, add='+')
+        lb.bind('<MouseWheel>', self._on_picker_wheel, add='+')
+        lb.bind('<Button-1>', self._on_picker_click, add='+')
+        picker.bind('<B1-Motion>', self._on_drag, add='+')
+        picker.bind('<ButtonRelease-1>', self._on_release, add='+')
+        picker.bind('<Escape>', lambda e: self._close_picker(commit=False), add='+')
+
+        def _sync_view():
+            try:
+                picker.update_idletasks()
+                self._center_on_vidx(self._sel_vidx)
+            except Exception:
+                pass
+        try:
+            picker.after_idle(_sync_view)
+            picker.after(10, _sync_view)
+        except Exception:
+            _sync_view()
+
+    def _on_picker_click(self, event):
+        lb = self._listbox
+        if lb is None:
+            return 'break'
+        try:
+            idx = lb.nearest(event.y)
+        except Exception:
+            return 'break'
+        vidx = int(idx) - self._pad
+        if vidx < 0 or vidx >= len(self._values):
+            return 'break'
+        self._center_on_vidx(vidx)
+        return 'break'
+
+    def _on_picker_wheel(self, event):
+        delta = getattr(event, 'delta', 0) or 0
+        # 与拖动一致：向下/滚轮下 = 减小
+        if delta > 0:
+            self._scroll_by(1)
+        elif delta < 0:
+            self._scroll_by(-1)
+        return 'break'
+
+    def _scroll_by(self, delta_rows):
+        if not self._values:
+            return
+        vidx = getattr(self, '_sel_vidx', 0) + int(delta_rows)
+        vidx = max(0, min(len(self._values) - 1, vidx))
+        self._center_on_vidx(vidx)
+
+    def _commit_and_close(self):
+        val = None
+        try:
+            if self._values and 0 <= self._sel_vidx < len(self._values):
+                val = self._values[self._sel_vidx]
+        except Exception:
+            val = None
+        self._close_picker(commit=False)
+        if val is not None:
+            try:
+                self.delete(0, 'end')
+                self.insert('end', str(val))
+            except Exception:
+                try:
+                    self.Entry.delete(0, 'end')
+                    self.Entry.insert('end', str(val))
+                except Exception:
+                    pass
+
+    def _close_picker(self, commit=True):
+        self._picker_open = False
+        self._cancel_press_timer()
+        if commit:
+            self._commit_and_close()
+            return
+        picker = self._picker
+        self._listbox = None
+        self._picker = None
+        self._drag_last_y = None
+        self._drag_accum = 0
+        try:
+            if picker is not None:
+                picker.destroy()
+        except Exception:
+            pass
+
+
+
+
+class DTouchSpinbox2(DSpinbox):
+    """
+    Canvas 版触摸滚轮 Spinbox：
+    - 长按弹出滚轮面板
+    - 手指/鼠标拖动丝滑跟手
+    - 松手后惯性减速，惯性完全停下后才关闭并写入数值
+    - 固定 5 行，选中行居中；列表上小下大；往下拖减小
+    """
+    def __init__(self, master, int_only=True, increment=1,
+                 from_=-float('inf'), to=float('inf'),
+                 long_press_ms=350, visible_rows=5, **kw):
+        super().__init__(master, int_only=int_only, increment=increment,
+                         from_=from_, to=to, **kw)
+        self._long_press_ms = int(long_press_ms)
+        self._visible_rows = 5
+        self._row_h = 32
+        self._press_after = None
+        self._picker = None
+        self._canvas = None
+        self._values = []
+        self._press_active = False
+        self._picker_open = False
+        self._inertia_running = False
+
+        # 滚动物理量：offset 表示「内容顶部相对视口顶部」的像素（越大越靠下、数值越大）
+        self._offset = 0.0
+        self._target_offset = 0.0
+        self._velocity = 0.0
+        self._drag_last_y = None
+        self._drag_last_t = None
+        self._anim_after = None
+        self._friction = 0.9          # 惯性摩擦系数（更小=更快停下）
+        self._min_velocity = 0.1       # 低于此视为静止（更大=更早进入吸附）
+        self._snap_strength = 0.3     # 松手后吸附到整数行的插值强度
+        self._rubber_px = 20.0         # 越界最大拉伸像素
+        self._rubber_spring = 1.0     # 回弹弹簧强度
+        self._rubber_target = None     # 越界回弹目标 offset（顶端/底端），非「上一值」
+
+        for w in (self.Entry, self):
+            w.bind('<ButtonPress-1>', self._on_press, add='+')
+            w.bind('<ButtonRelease-1>', self._on_release, add='+')
+            w.bind('<B1-Motion>', self._on_drag, add='+')
+        try:
+            self.DButton_up.bind('<ButtonPress-1>', self._on_press, add='+')
+            self.DButton_up.bind('<ButtonRelease-1>', self._on_release, add='+')
+            self.DButton_up.bind('<B1-Motion>', self._on_drag, add='+')
+            self.DButton_down.bind('<ButtonPress-1>', self._on_press, add='+')
+            self.DButton_down.bind('<ButtonRelease-1>', self._on_release, add='+')
+            self.DButton_down.bind('<B1-Motion>', self._on_drag, add='+')
+        except Exception:
+            pass
+
+    # ---------- 工具 ----------
+    def _read_current_value(self):
+        raw = ''
+        try:
+            raw = self.Entry.get().strip()
+        except Exception:
+            try:
+                raw = self.get().strip()
+            except Exception:
+                raw = ''
+        if raw in ('', '-', '.', '-.'):
+            lo = self.from_
+            if lo not in (float('-inf'), float('inf')):
+                try:
+                    return int(lo) if self.int_only else float(lo)
+                except Exception:
+                    pass
+            return 0
+        try:
+            return int(float(raw)) if self.int_only else float(raw)
+        except Exception:
+            return 0
+
+    def _build_values(self):
+        cur_v = self._read_current_value()
+        inc = self.increment if self.increment else 1
+        lo, hi = self.from_, self.to
+        finite = (
+            lo not in (float('inf'), float('-inf'))
+            and hi not in (float('inf'), float('-inf'))
+            and abs(hi - lo) / max(abs(inc), 1e-9) <= 2000
+        )
+        values = []
+        if finite:
+            v = lo
+            guard = 0
+            while v <= hi + 1e-9 and guard < 5000:
+                values.append(int(round(v)) if self.int_only else v)
+                v = v + inc
+                guard += 1
+        else:
+            half = 50
+            start = cur_v - half * inc
+            for i in range(half * 2 + 1):
+                v = start + i * inc
+                if lo not in (float('-inf'),) and v < lo:
+                    continue
+                if hi not in (float('inf'),) and v > hi:
+                    continue
+                values.append(int(round(v)) if self.int_only else v)
+            if not values:
+                values = [int(cur_v) if self.int_only else cur_v]
+        seen, uniq = set(), []
+        for v in values:
+            key = int(v) if self.int_only else float(v)
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(v)
+        self._values = uniq
+        return uniq
+
+    def _nearest_index(self, values, cur_v):
+        if not values:
+            return 0
+        best_i, best_d = 0, abs(float(values[0]) - float(cur_v))
+        for i, v in enumerate(values):
+            d = abs(float(v) - float(cur_v))
+            if d < best_d:
+                best_i, best_d = i, d
+        return best_i
+
+    def _offset_for_index(self, idx):
+        """使 index 行落在视口正中央时的 offset。"""
+        mid = self._visible_rows // 2
+        return float(idx - mid) * self._row_h
+
+    def _range_offset(self):
+        if not self._values:
+            return 0.0, 0.0
+        lo = self._offset_for_index(0)
+        hi = self._offset_for_index(len(self._values) - 1)
+        if hi < lo:
+            lo, hi = hi, lo
+        return float(lo), float(hi)
+
+    def _clamp_offset(self, off):
+        lo, hi = self._range_offset()
+        return max(lo, min(hi, float(off)))
+
+    def _rubber_offset(self, off):
+        """允许越界，指数衰减拉伸，松手后由弹簧拉回。"""
+        lo, hi = self._range_offset()
+        off = float(off)
+        limit = float(getattr(self, '_rubber_px', 52.0) or 52.0)
+        if off < lo:
+            d = lo - off
+            return lo - limit * (1.0 - math.exp(-d / max(limit, 1.0)))
+        if off > hi:
+            d = off - hi
+            return hi + limit * (1.0 - math.exp(-d / max(limit, 1.0)))
+        return off
+
+    def _index_from_offset(self, off):
+        mid = self._visible_rows // 2
+        # 中心行对应的内容行号
+        idx = int(round(off / self._row_h + mid))
+        if not self._values:
+            return 0
+        return max(0, min(len(self._values) - 1, idx))
+
+    def _fmt(self, v):
+        if self.int_only:
+            return str(int(v))
+        return '%g' % float(v)
+
+    # ---------- 按下 / 拖动 / 松开 ----------
+    def _on_press(self, event=None):
+        if getattr(self, '_state', 'normal') == 'disabled':
+            return
+        if self._picker_open:
+            # 已打开时按下：中断惯性，进入跟手拖动
+            self._inertia_running = False
+            self._velocity = 0.0
+            self._drag_last_y = event.y_root if event else None
+            self._drag_last_t = self._now()
+            return
+        self._press_active = True
+        self._drag_last_y = event.y_root if event is not None else None
+        self._drag_last_t = self._now()
+        self._cancel_press_timer()
+        try:
+            self._press_after = self.after(self._long_press_ms, self._open_picker)
+        except Exception:
+            self._press_after = None
+
+    def _now(self):
+        try:
+            import time
+            return time.perf_counter()
+        except Exception:
+            return 0.0
+
+    def _cancel_press_timer(self):
+        if self._press_after is not None:
+            try:
+                self.after_cancel(self._press_after)
+            except Exception:
+                pass
+            self._press_after = None
+
+    def _on_drag(self, event):
+        if not self._picker_open:
+            if self._press_after is not None and self._drag_last_y is not None:
+                if abs(event.y_root - self._drag_last_y) > 24:
+                    self._cancel_press_timer()
+            self._drag_last_y = event.y_root
+            return
+        if self._drag_last_y is None:
+            self._drag_last_y = event.y_root
+            self._drag_last_t = self._now()
+            return
+        dy = event.y_root - self._drag_last_y
+        t = self._now()
+        dt = max(1e-3, t - (self._drag_last_t or t))
+        self._drag_last_y = event.y_root
+        self._drag_last_t = t
+        # 往下拖 → 减小；越界橡胶拉伸，不硬截断
+        self._offset = self._rubber_offset(self._offset - dy)
+        self._velocity = (-dy) / dt
+        self._inertia_running = False
+        self._redraw()
+
+    def _on_release(self, event=None):
+        self._press_active = False
+        self._cancel_press_timer()
+        self._drag_last_y = None
+        if not self._picker_open:
+            return
+        # 若已越界：回弹目标锁定为最顶/最底，而不是松手前的中间某一项
+        try:
+            lo, hi = self._range_offset()
+            if self._offset < lo - 0.5:
+                self._rubber_target = lo  # 最顶端（最小项居中）
+            elif self._offset > hi + 0.5:
+                self._rubber_target = hi  # 最底端（最大项居中）
+            else:
+                self._rubber_target = None
+        except Exception:
+            self._rubber_target = None
+        self._start_inertia()
+
+    # ---------- 惯性 & 吸附 ----------
+    def _start_inertia(self):
+        self._inertia_running = True
+        # 若速度很小，直接吸附
+        if abs(self._velocity) < 80:
+            self._velocity = 0.0
+        self._tick_inertia()
+
+    def _tick_inertia(self):
+        if not self._picker_open:
+            self._inertia_running = False
+            return
+        if not self._inertia_running:
+            return
+
+        dt = 1.0 / 60.0
+        lo, hi = self._range_offset()
+        spring = float(getattr(self, '_rubber_spring', 22.0) or 22.0)
+
+        # 越界回弹：必须弹到最顶 lo 或最底 hi（不是弹回上一个选中值）
+        edge_target = getattr(self, '_rubber_target', None)
+        if edge_target is not None or self._offset < lo - 0.5 or self._offset > hi + 0.5:
+            if edge_target is None:
+                edge_target = lo if self._offset < lo else hi
+                self._rubber_target = edge_target
+            # 弹簧拉向边界
+            self._velocity += (edge_target - self._offset) * spring
+            self._velocity *= 0.80
+            self._offset += self._velocity * dt
+            # 到达边界附近并几乎静止 → 钉在边界，再吸附关窗
+            if abs(self._offset - edge_target) < 0.8 and abs(self._velocity) < 50:
+                self._offset = float(edge_target)
+                self._velocity = 0.0
+                self._rubber_target = None
+                self._redraw()
+                # 直接进入整数行吸附（此时就是最顶/最底那一行）
+                target_idx = 0 if abs(edge_target - lo) <= abs(edge_target - hi) else max(0, len(self._values) - 1)
+                target_off = self._offset_for_index(target_idx)
+                self._offset = target_off
+                self._redraw()
+                self._inertia_running = False
+                self._finish_and_close()
+                return
+            self._redraw()
+            try:
+                self._anim_after = self.after(16, self._tick_inertia)
+            except Exception:
+                pass
+            return
+
+        # 范围内惯性
+        if abs(self._velocity) >= self._min_velocity * 40:
+            self._offset = self._offset + self._velocity * dt
+            if self._offset < lo or self._offset > hi:
+                # 冲出边界：锁定回弹到对应端点
+                self._rubber_target = lo if self._offset < lo else hi
+                self._velocity *= 0.55
+            else:
+                self._velocity *= self._friction
+            self._redraw()
+            try:
+                self._anim_after = self.after(16, self._tick_inertia)
+            except Exception:
+                pass
+            return
+
+        # 速度已很低：吸附到最近整数行
+        self._velocity = 0.0
+        self._offset = self._clamp_offset(self._offset)
+        target_idx = self._index_from_offset(self._offset)
+        target_off = self._offset_for_index(target_idx)
+        diff = target_off - self._offset
+        if abs(diff) > 0.5:
+            self._offset += diff * self._snap_strength
+            if abs(target_off - self._offset) < 0.5:
+                self._offset = target_off
+            self._redraw()
+            try:
+                self._anim_after = self.after(16, self._tick_inertia)
+            except Exception:
+                pass
+            return
+
+        # 吸附完成 → 关闭并提交
+        self._offset = target_off
+        self._redraw()
+        self._inertia_running = False
+        self._finish_and_close()
+
+    def _cancel_anim(self):
+        if self._anim_after is not None:
+            try:
+                self.after_cancel(self._anim_after)
+            except Exception:
+                pass
+            self._anim_after = None
+
+    # ---------- 绘制 ----------
+    def _redraw(self):
+        cv = self._canvas
+        if cv is None or not self._values:
+            return
+        try:
+            cv.delete('all')
+        except Exception:
+            return
+        try:
+            w = int(cv.winfo_width())
+            h = int(cv.winfo_height())
+        except Exception:
+            return
+        if w <= 1:
+            w = 120
+        if h <= 1:
+            h = self._row_h * self._visible_rows
+
+        row_h = self._row_h
+        mid_y = h / 2.0
+        # 选中带
+        band_y1 = mid_y - row_h / 2.0
+        band_y2 = mid_y + row_h / 2.0
+        cv.create_rectangle(0, band_y1, w, band_y2, fill=HIGHLIGHT, outline='', tags='band')
+
+        # 内容：第 i 行中心在屏幕 y = (i + 0.5) * row_h - offset
+        # 即 y = i*row_h + row_h/2 - offset
+        for i, v in enumerate(self._values):
+            cy = i * row_h + row_h / 2.0 - self._offset
+            if cy < -row_h or cy > h + row_h:
+                continue
+            text = self._fmt(v)
+            # 距离中心越远越淡
+            dist = abs(cy - mid_y) / row_h
+            if dist < 0.5:
+                fill = TEXTFG
+                font = ('微软雅黑', 16, 'bold')
+            elif dist < 1.5:
+                fill = SECONDARYTEXTFG
+                font = ('微软雅黑', 14)
+            else:
+                fill = SECONDARYTEXTFG
+                font = ('微软雅黑', 12)
+            cv.create_text(w / 2.0, cy, text=text, fill=fill, font=font, anchor='center')
+
+        # 上下渐隐遮罩（简单用半透明感的色带近似）
+        fade = WIDGETBG
+        cv.create_rectangle(0, 0, w, row_h * 0.6, fill=fade, outline='')
+        cv.create_rectangle(0, h - row_h * 0.6, w, h, fill=fade, outline='')
+
+    # ---------- 打开 / 关闭 ----------
+    def _open_picker(self):
+        if not self._press_active or self._picker_open:
+            return
+        if getattr(self, '_state', 'normal') == 'disabled':
+            return
+
+        cur_v = self._read_current_value()
+        values = self._build_values()
+        if not values:
+            return
+        sel_i = self._nearest_index(values, cur_v)
+        self._offset = self._offset_for_index(sel_i)
+        self._velocity = 0.0
+        self._inertia_running = False
+        self._rubber_target = None
+
+        try:
+            self.update_idletasks()
+            x = self.winfo_rootx()
+            y = self.winfo_rooty() + self.winfo_height() + 4
+            w = max(self.winfo_width(), 100)
+        except Exception:
+            x, y, w = 100, 100, 120
+
+        h = self._row_h * self._visible_rows
+
+        picker = tk.Toplevel(self)
+        picker.overrideredirect(True)
+        picker.resizable(False, False)
+        try:
+            picker.attributes('-topmost', True)
+        except Exception:
+            pass
+        picker.configure(bg=WIDGETBG, bd=0, highlightthickness=0)
+        try:
+            sw, sh = picker.winfo_screenwidth(), picker.winfo_screenheight()
+            if x + w > sw:
+                x = max(0, sw - w - 4)
+            if y + h > sh:
+                y = max(0, self.winfo_rooty() - h - 4)
+        except Exception:
+            pass
+        picker.geometry(f'{w}x{h}+{x}+{y}')
+
+        try:
+            SetBorder(picker, mode='place', bd=1, focusbd=1, color=BDCOLOR, focuscolor=HIGHLIGHT)
+        except Exception:
+            try:
+                SetBorder(picker, bd=1, focusbd=1, color=BDCOLOR, focuscolor=HIGHLIGHT)
+            except Exception:
+                pass
+
+        cv = tk.Canvas(
+            picker, bg=WIDGETBG, bd=0, highlightthickness=0,
+            width=w, height=h,
+        )
+        cv.pack(fill='both', expand=True)
+
+        self._picker = picker
+        self._canvas = cv
+        self._picker_open = True
+        self._drag_last_y = None
+        self._drag_last_t = None
+
+        cv.bind('<ButtonPress-1>', self._on_press, add='+')
+        cv.bind('<B1-Motion>', self._on_drag, add='+')
+        cv.bind('<ButtonRelease-1>', self._on_release, add='+')
+        cv.bind('<MouseWheel>', self._on_wheel, add='+')
+        picker.bind('<ButtonRelease-1>', self._on_release, add='+')
+        picker.bind('<Escape>', lambda e: self._force_close(), add='+')
+
+        def _first_draw():
+            try:
+                picker.update_idletasks()
+                self._redraw()
+            except Exception:
+                pass
+        try:
+            picker.after_idle(_first_draw)
+            picker.after(10, _first_draw)
+        except Exception:
+            _first_draw()
+
+    def _on_wheel(self, event):
+        if not self._picker_open:
+            return 'break'
+        delta = getattr(event, 'delta', 0) or 0
+        # 滚轮下 = 减小（与拖动一致）
+        if delta > 0:
+            self._velocity = -200
+        elif delta < 0:
+            self._velocity = 200
+        else:
+            return 'break'
+        self._inertia_running = True
+        self._cancel_anim()
+        self._tick_inertia()
+        return 'break'
+
+    def _finish_and_close(self):
+        """惯性/吸附结束后提交数值并关窗。"""
+        val = None
+        try:
+            idx = self._index_from_offset(self._offset)
+            if self._values and 0 <= idx < len(self._values):
+                val = self._values[idx]
+        except Exception:
+            val = None
+        self._destroy_picker()
+        if val is not None:
+            try:
+                self.delete(0, 'end')
+                self.insert('end', str(val))
+            except Exception:
+                try:
+                    self.Entry.delete(0, 'end')
+                    self.Entry.insert('end', str(val))
+                except Exception:
+                    pass
+
+    def _force_close(self):
+        """Esc：不提交，直接关。"""
+        self._inertia_running = False
+        self._velocity = 0.0
+        self._cancel_anim()
+        self._destroy_picker()
+
+    def _destroy_picker(self):
+        self._picker_open = False
+        self._inertia_running = False
+        self._cancel_anim()
+        self._cancel_press_timer()
+        picker = self._picker
+        self._picker = None
+        self._canvas = None
+        self._drag_last_y = None
+        try:
+            if picker is not None:
+                picker.destroy()
+        except Exception:
+            pass
+
+
+
+
+class DTreeview(tk.Frame):
+    """
+    Canvas 重写的 Treeview，尽量兼容 ttk.Treeview 常用 API，可作替换。
+    支持：树形展开/收起（非线性 ease-out 动画）、多列、标签配色、
+    selection/focus/see、yscrollcommand、heading/column、bbox/identify_* 等。
+    """
+
+    _iid_seq = 0
+
+    def __init__(self, master=None, columns=(), show='tree headings',
+                 selectmode='browse', yscrollcommand=None, style=None,
+                 height=10, takefocus=True, **kw):
+        bg = kw.pop('bg', WINDOWBG)
+        super().__init__(master, bg=bg, bd=0, highlightthickness=0, **{
+            k: v for k, v in kw.items() if k in ('width', 'height')
+        })
+
+        self._show = show
+        self._selectmode = selectmode
+        self._yscrollcommand = yscrollcommand
+        self._style_name = style
+        self._takefocus = takefocus
+
+        # columns: tuple of data column ids (not including #0)
+        if isinstance(columns, str):
+            columns = (columns,)
+        self._columns = tuple(columns) if columns else ()
+
+        self._rowheight = 36
+        self._heading_height = 32
+        self._indent = 18
+        self._font = ('微软雅黑', 11)
+        self._heading_font = ('微软雅黑', 11, 'bold')
+
+        # column config: id -> {width, minwidth, anchor, stretch}
+        self._col_cfg = {
+            '#0': {'width': 120, 'minwidth': 40, 'anchor': 'w', 'stretch': True, 'text': '', 'anchor_heading': 'center'},
+        }
+        for c in self._columns:
+            self._col_cfg[c] = {'width': 120, 'minwidth': 20, 'anchor': 'w', 'stretch': True, 'text': str(c), 'anchor_heading': 'center'}
+
+        # tree data
+        # iid -> {parent, children[], text, values, tags, open, image}
+        self._nodes = {}
+        self._root_children = []  # ordered iids under ''
+        self._selection = []
+        self._focus_iid = None
+
+        # tags: name -> {background, foreground}
+        self._tag_cfg = {}
+
+        # scroll
+        self._scroll_y = 0.0  # pixel offset of content
+        self._content_height = 0
+        self._animating = False
+        self._anim_after = None
+        # expand/collapse animation: iid -> {progress 0..1, expanding bool, height_from, height_to}
+        self._row_anim = {}
+        self._last_indicator_time = 0.0
+        self._last_indicator_iid = None
+
+        # heading strip + body canvas
+        self._heading_canvas = tk.Canvas(self, bg=WINDOWBG, bd=0, highlightthickness=0, height=self._heading_height)
+        self._body = tk.Canvas(self, bg=WINDOWBG, bd=0, highlightthickness=0, takefocus=takefocus)
+        if 'headings' in (show or ''):
+            self._heading_canvas.pack(fill='x', side='top')
+        self._body.pack(fill='both', expand=True)
+
+        self._body.bind('<Configure>', self._on_configure)
+        self._body.bind('<MouseWheel>', self._on_mousewheel)
+        self._body.bind('<Button-1>', self._on_click)
+        self._body.bind('<Double-Button-1>', self._on_double_click)
+        self._heading_canvas.bind('<Configure>', lambda e: self._draw_heading())
+
+        # virtual event compatibility: bind works on Frame
+        self._event_proxy = self._body
+
+    # ---------------- ttk-like config ----------------
+    def configure(self, cnf=None, **kw):
+        if cnf and isinstance(cnf, dict):
+            kw = {**cnf, **kw}
+        elif cnf is not None and not kw:
+            return self.cget(cnf)
+        if 'yscrollcommand' in kw:
+            self._yscrollcommand = kw.pop('yscrollcommand')
+        if 'selectmode' in kw:
+            self._selectmode = kw.pop('selectmode')
+        if 'columns' in kw:
+            cols = kw.pop('columns')
+            if isinstance(cols, str):
+                cols = (cols,)
+            self._columns = tuple(cols)
+            for c in self._columns:
+                self._col_cfg.setdefault(c, {'width': 120, 'minwidth': 20, 'anchor': 'w', 'stretch': True, 'text': str(c), 'anchor_heading': 'center'})
+        if 'show' in kw:
+            self._show = kw.pop('show')
+        if kw:
+            try:
+                super().configure(**kw)
+            except Exception:
+                pass
+        return None
+
+    config = configure
+
+    def cget(self, key):
+        if key == 'yscrollcommand':
+            return self._yscrollcommand
+        if key == 'columns':
+            return self._columns
+        if key == 'show':
+            return self._show
+        if key == 'selectmode':
+            return self._selectmode
+        return super().cget(key)
+
+    def __getitem__(self, key):
+        return self.cget(key)
+
+    def __setitem__(self, key, value):
+        self.configure(**{key: value})
+
+    # ---------------- column / heading ----------------
+    def heading(self, column, option=None, **kw):
+        col = self._norm_col(column)
+        cfg = self._col_cfg.setdefault(col, {'width': 120, 'minwidth': 20, 'anchor': 'w', 'stretch': True, 'text': '', 'anchor_heading': 'center'})
+        if option is not None and not kw:
+            if option == 'text':
+                return cfg.get('text', '')
+            if option == 'anchor':
+                return cfg.get('anchor_heading', 'center')
+            return cfg.get(option)
+        if 'text' in kw:
+            cfg['text'] = kw['text']
+        if 'anchor' in kw:
+            cfg['anchor_heading'] = kw['anchor']
+        self._draw_heading()
+        return None
+
+    def column(self, column, option=None, **kw):
+        col = self._norm_col(column)
+        cfg = self._col_cfg.setdefault(col, {'width': 120, 'minwidth': 20, 'anchor': 'w', 'stretch': True, 'text': '', 'anchor_heading': 'center'})
+        if option is not None and not kw:
+            return cfg.get(option, '' if option == 'text' else 0)
+        for k in ('width', 'minwidth', 'anchor', 'stretch'):
+            if k in kw:
+                cfg[k] = kw[k]
+        self.redraw()
+        self._draw_heading()
+        return None
+
+    def _norm_col(self, column):
+        c = str(column)
+        if c in ('#0', '0'):
+            return '#0'
+        if c.startswith('#'):
+            try:
+                idx = int(c[1:]) - 1
+                if 0 <= idx < len(self._columns):
+                    return self._columns[idx]
+            except Exception:
+                pass
+        return c
+
+    # ---------------- data API ----------------
+    def insert(self, parent, index, iid=None, **kw):
+        parent = parent or ''
+        if iid is None:
+            DTreeview._iid_seq += 1
+            iid = f'I{DTreeview._iid_seq:05X}'
+        else:
+            iid = str(iid)
+        if iid in self._nodes:
+            raise ValueError(f'Item {iid} already exists')
+        text = kw.get('text', '')
+        values = kw.get('values', ())
+        if isinstance(values, str):
+            values = (values,)
+        tags = kw.get('tags', ())
+        if isinstance(tags, str):
+            tags = (tags,) if tags else ()
+        opened = bool(kw.get('open', False))
+        node = {
+            'parent': parent,
+            'children': [],
+            'text': text,
+            'values': tuple(values),
+            'tags': tuple(tags),
+            'open': opened,
+            'image': kw.get('image'),
+        }
+        self._nodes[iid] = node
+        siblings = self._root_children if parent == '' else self._nodes[parent]['children']
+        if index in ('end', 'END', None):
+            siblings.append(iid)
+        else:
+            try:
+                i = int(index)
+                siblings.insert(max(0, min(i, len(siblings))), iid)
+            except Exception:
+                siblings.append(iid)
+        self.redraw(animate=False)
+        return iid
+
+    def delete(self, *items):
+        for iid in items:
+            self._delete_recursive(str(iid))
+        self._selection = [s for s in self._selection if s in self._nodes]
+        if self._focus_iid not in self._nodes:
+            self._focus_iid = None
+        self.redraw(animate=False)
+
+    def _delete_recursive(self, iid):
+        if iid not in self._nodes:
+            return
+        node = self._nodes[iid]
+        for ch in list(node['children']):
+            self._delete_recursive(ch)
+        parent = node['parent']
+        siblings = self._root_children if parent == '' else self._nodes.get(parent, {}).get('children', [])
+        if iid in siblings:
+            siblings.remove(iid)
+        del self._nodes[iid]
+
+    def get_children(self, item=''):
+        item = item or ''
+        if item == '':
+            return tuple(self._root_children)
+        if item not in self._nodes:
+            return ()
+        return tuple(self._nodes[item]['children'])
+
+    def exists(self, item):
+        return str(item) in self._nodes
+
+    def index(self, item):
+        item = str(item)
+        node = self._nodes.get(item)
+        if not node:
+            raise tk.TclError(f'Item {item} not found')
+        parent = node['parent']
+        siblings = self._root_children if parent == '' else self._nodes[parent]['children']
+        return siblings.index(item)
+
+    def item(self, item, option=None, **kw):
+        item = str(item)
+        if item not in self._nodes:
+            raise tk.TclError(f'Item {item} not found')
+        node = self._nodes[item]
+        if option is not None and not kw:
+            if option == 'text':
+                return node['text']
+            if option == 'values':
+                return node['values']
+            if option == 'open':
+                return bool(node['open'])
+            if option == 'tags':
+                return node['tags']
+            if option == 'image':
+                return node.get('image')
+            return node.get(option)
+        need_anim = False
+        if 'text' in kw:
+            node['text'] = kw['text']
+        if 'values' in kw:
+            v = kw['values']
+            if isinstance(v, str):
+                v = (v,)
+            node['values'] = tuple(v)
+        if 'tags' in kw:
+            tg = kw['tags']
+            if isinstance(tg, str):
+                tg = (tg,) if tg else ()
+            node['tags'] = tuple(tg)
+        if 'open' in kw:
+            new_open = bool(kw['open'])
+            if new_open != bool(node['open']):
+                node['open'] = new_open
+                need_anim = True
+                self._start_toggle_anim(item, new_open)
+                try:
+                    if new_open:
+                        self.event_generate('<<TreeviewOpen>>')
+                    else:
+                        self.event_generate('<<TreeviewClose>>')
+                except Exception:
+                    pass
+        if 'image' in kw:
+            node['image'] = kw['image']
+        if not need_anim:
+            self.redraw(animate=False)
+        return None
+
+    def move(self, item, parent, index):
+        item, parent = str(item), (parent or '')
+        if item not in self._nodes:
+            return
+        node = self._nodes[item]
+        old_parent = node['parent']
+        old_sib = self._root_children if old_parent == '' else self._nodes[old_parent]['children']
+        if item in old_sib:
+            old_sib.remove(item)
+        node['parent'] = parent
+        new_sib = self._root_children if parent == '' else self._nodes[parent]['children']
+        if index in ('end', 'END', None):
+            new_sib.append(item)
+        else:
+            i = int(index)
+            new_sib.insert(max(0, min(i, len(new_sib))), item)
+        self.redraw(animate=False)
+
+    # ---------------- selection / focus / see ----------------
+    def selection_set(self, *items):
+        if len(items) == 1 and not isinstance(items[0], str):
+            try:
+                items = tuple(items[0])
+            except Exception:
+                pass
+        self._selection = [str(i) for i in items if str(i) in self._nodes]
+        if self._selectmode == 'browse' and self._selection:
+            self._selection = self._selection[:1]
+        self.redraw(animate=False)
+
+    def selection_add(self, *items):
+        for i in items:
+            i = str(i)
+            if i in self._nodes and i not in self._selection:
+                if self._selectmode == 'browse':
+                    self._selection = [i]
+                else:
+                    self._selection.append(i)
+        self.redraw(animate=False)
+
+    def selection_remove(self, *items):
+        rem = {str(i) for i in items}
+        self._selection = [s for s in self._selection if s not in rem]
+        self.redraw(animate=False)
+
+    def selection_toggle(self, *items):
+        for i in items:
+            i = str(i)
+            if i in self._selection:
+                self._selection.remove(i)
+            elif i in self._nodes:
+                if self._selectmode == 'browse':
+                    self._selection = [i]
+                else:
+                    self._selection.append(i)
+        self.redraw(animate=False)
+
+    def selection(self):
+        return tuple(self._selection)
+
+    def focus(self, item=None):
+        if item is None:
+            return self._focus_iid
+        item = str(item)
+        if item in self._nodes:
+            self._focus_iid = item
+            self.redraw(animate=False)
+        return self._focus_iid
+
+
+    def parent(self, item):
+        """返回父节点 iid；根节点返回 ''。"""
+        item = str(item)
+        if item not in self._nodes:
+            return ''
+        return self._nodes[item].get('parent', '') or ''
+
+    def next(self, item):
+        """同一父节点下的下一个兄弟；没有则 ''。"""
+        item = str(item)
+        if item not in self._nodes:
+            return ''
+        parent = self._nodes[item].get('parent', '') or ''
+        siblings = self._root_children if parent == '' else self._nodes[parent]['children']
+        try:
+            i = siblings.index(item)
+        except ValueError:
+            return ''
+        if i + 1 < len(siblings):
+            return siblings[i + 1]
+        return ''
+
+    def prev(self, item):
+        """同一父节点下的上一个兄弟；没有则 ''。"""
+        item = str(item)
+        if item not in self._nodes:
+            return ''
+        parent = self._nodes[item].get('parent', '') or ''
+        siblings = self._root_children if parent == '' else self._nodes[parent]['children']
+        try:
+            i = siblings.index(item)
+        except ValueError:
+            return ''
+        if i - 1 >= 0:
+            return siblings[i - 1]
+        return ''
+
+    def set(self, item, column=None, value=None):
+        """
+        set(item) -> dict of column->value
+        set(item, column) -> value
+        set(item, column, value) -> set and return value
+        """
+        item = str(item)
+        if item not in self._nodes:
+            raise tk.TclError(f'Item {item} not found')
+        node = self._nodes[item]
+        values = list(node.get('values', ()))
+        # pad values to column count
+        while len(values) < len(self._columns):
+            values.append('')
+        if column is None and value is None:
+            return {c: (values[i] if i < len(values) else '') for i, c in enumerate(self._columns)}
+        col = self._norm_col(column)
+        if col == '#0':
+            if value is None:
+                return node.get('text', '')
+            node['text'] = value
+            self.redraw(animate=False)
+            return value
+        try:
+            idx = self._columns.index(col)
+        except ValueError:
+            # try #n
+            c = str(column)
+            if c.startswith('#'):
+                try:
+                    idx = int(c[1:]) - 1
+                except Exception:
+                    idx = -1
+            else:
+                idx = -1
+        if idx < 0 or idx >= len(self._columns):
+            if value is None:
+                return ''
+            return value
+        if value is None:
+            return values[idx] if idx < len(values) else ''
+        while len(values) <= idx:
+            values.append('')
+        values[idx] = value
+        node['values'] = tuple(values)
+        self.redraw(animate=False)
+        return value
+
+    def set_children(self, item, *newchildren):
+        """替换 item 的子节点列表（按给定顺序）。"""
+        item = item or ''
+        newchildren = [str(c) for c in newchildren]
+        if item == '':
+            # roots
+            for c in list(self._root_children):
+                if c not in newchildren and c in self._nodes:
+                    self._nodes[c]['parent'] = ''
+            self._root_children = []
+            for c in newchildren:
+                if c in self._nodes:
+                    old_p = self._nodes[c].get('parent', '')
+                    if old_p and old_p in self._nodes and c in self._nodes[old_p]['children']:
+                        self._nodes[old_p]['children'].remove(c)
+                    self._nodes[c]['parent'] = ''
+                    self._root_children.append(c)
+        else:
+            if item not in self._nodes:
+                raise tk.TclError(f'Item {item} not found')
+            self._nodes[item]['children'] = []
+            for c in newchildren:
+                if c in self._nodes:
+                    old_p = self._nodes[c].get('parent', '') or ''
+                    if old_p == '':
+                        if c in self._root_children:
+                            self._root_children.remove(c)
+                    elif old_p in self._nodes and c in self._nodes[old_p]['children']:
+                        self._nodes[old_p]['children'].remove(c)
+                    self._nodes[c]['parent'] = item
+                    self._nodes[item]['children'].append(c)
+        self.redraw(animate=False)
+
+    def detach(self, *items):
+        """从树中摘下节点（不删除，可 reattach）。"""
+        for item in items:
+            item = str(item)
+            if item not in self._nodes:
+                continue
+            parent = self._nodes[item].get('parent', '') or ''
+            siblings = self._root_children if parent == '' else self._nodes.get(parent, {}).get('children', [])
+            if item in siblings:
+                siblings.remove(item)
+            self._nodes[item]['parent'] = None  # detached marker
+            if item in self._selection:
+                self._selection.remove(item)
+            if self._focus_iid == item:
+                self._focus_iid = None
+        self.redraw(animate=False)
+
+    def reattach(self, item, parent, index):
+        """将 detach 的节点挂回。"""
+        item = str(item)
+        parent = parent or ''
+        if item not in self._nodes:
+            raise tk.TclError(f'Item {item} not found')
+        # remove from old place if still linked
+        old_p = self._nodes[item].get('parent', '')
+        if old_p is None:
+            old_p = ''
+        elif old_p != '' and old_p in self._nodes:
+            if item in self._nodes[old_p]['children']:
+                self._nodes[old_p]['children'].remove(item)
+        elif item in self._root_children:
+            self._root_children.remove(item)
+        self._nodes[item]['parent'] = parent
+        siblings = self._root_children if parent == '' else self._nodes[parent]['children']
+        if index in ('end', 'END', None):
+            siblings.append(item)
+        else:
+            i = int(index)
+            siblings.insert(max(0, min(i, len(siblings))), item)
+        self.redraw(animate=False)
+
+    def identify(self, component, x, y):
+        """identify(component, x, y) — 兼容 ttk：component 为 'row'/'column'/'region'/'element'。"""
+        component = str(component)
+        if component == 'row':
+            return self.identify_row(y)
+        if component == 'column':
+            return self.identify_column(x)
+        if component == 'region':
+            return self.identify_region(x, y)
+        if component == 'element':
+            return self.identify_element(x, y)
+        return ''
+
+    def identify_region(self, x, y):
+        # heading area is separate canvas — body coords only
+        if y < 0:
+            return 'heading'
+        iid = self.identify_row(y)
+        if not iid:
+            return 'nothing'
+        node = self._nodes.get(iid)
+        if node and node.get('children'):
+            rows = self._visible_rows_info()
+            depth = 0
+            for i, d, h in rows:
+                if i == iid:
+                    depth = d
+                    break
+            indent = 6 + depth * self._indent
+            if x < indent + 20:
+                return 'tree'
+        col = self.identify_column(x)
+        if col == '#0':
+            return 'tree'
+        return 'cell'
+
+    def identify_element(self, x, y):
+        region = self.identify_region(x, y)
+        if region == 'tree':
+            iid = self.identify_row(y)
+            node = self._nodes.get(iid) if iid else None
+            if node and node.get('children'):
+                rows = self._visible_rows_info()
+                depth = 0
+                for i, d, h in rows:
+                    if i == iid:
+                        depth = d
+                        break
+                indent = 6 + depth * self._indent
+                if x < indent + 20:
+                    return 'Treeitem.indicator'
+            return 'Treeitem.text'
+        if region == 'cell':
+            return 'Treeitem.text'
+        if region == 'heading':
+            return 'Treeheading.text'
+        return ''
+
+    def selection_includes(self, item):
+        return str(item) in self._selection
+
+    def tag_names(self):
+        names = set(self._tag_cfg.keys())
+        for n in self._nodes.values():
+            for tg in n.get('tags', ()):
+                names.add(tg)
+        return tuple(names)
+
+    def tag_bind(self, tagname, sequence=None, func=None, add=None):
+        # 简化：存起来，点击时若 item 含 tag 则触发
+        if not hasattr(self, '_tag_binds'):
+            self._tag_binds = {}
+        self._tag_binds.setdefault(tagname, []).append((sequence, func, add))
+        return None
+
+    def tag_unbind(self, tagname, sequence, funcid=None):
+        if not hasattr(self, '_tag_binds'):
+            return
+        lst = self._tag_binds.get(tagname, [])
+        self._tag_binds[tagname] = [x for x in lst if x[0] != sequence]
+
+    def xview(self, *args):
+        # 暂无横向滚动内容，返回满幅
+        if not args:
+            return (0.0, 1.0)
+        return None
+
+    def xview_moveto(self, frac):
+        return None
+
+    def xview_scroll(self, number, what):
+        return None
+
+    def state(self, statespec=None):
+        # ttk state 兼容占位
+        if statespec is None:
+            return ()
+        return None
+
+    def see(self, item):
+        item = str(item)
+        # ensure parents open
+        path = []
+        cur = item
+        while cur in self._nodes:
+            p = self._nodes[cur]['parent']
+            if p == '':
+                break
+            path.append(p)
+            cur = p
+        for p in reversed(path):
+            if not self._nodes[p]['open']:
+                self.item(p, open=True)
+        self.redraw(animate=False)
+        rows = self._visible_rows_info()
+        y = 0
+        for iid, _depth, _h in rows:
+            if iid == item:
+                view_h = max(1, self._body.winfo_height())
+                if y < self._scroll_y:
+                    self._scroll_y = float(y)
+                elif y + self._rowheight > self._scroll_y + view_h:
+                    self._scroll_y = float(y + self._rowheight - view_h)
+                self._scroll_y = max(0, self._scroll_y)
+                self._report_scroll()
+                self.redraw(animate=False)
+                return
+            y += self._rowheight
+
+    # ---------------- tags ----------------
+    def tag_configure(self, tagname, **kw):
+        cfg = self._tag_cfg.setdefault(tagname, {})
+        if 'background' in kw:
+            cfg['background'] = kw['background']
+        if 'foreground' in kw:
+            cfg['foreground'] = kw['foreground']
+        self.redraw(animate=False)
+
+    def tag_has(self, tagname, item=None):
+        if item is None:
+            return tuple(i for i, n in self._nodes.items() if tagname in n['tags'])
+        return tagname in self._nodes.get(str(item), {}).get('tags', ())
+
+    # ---------------- identify / bbox ----------------
+    def identify_row(self, y):
+        # y relative to body canvas
+        if 'headings' in (self._show or ''):
+            # if event was relative to whole widget, callers usually use tree coords from body
+            pass
+        rows = self._visible_rows_info()
+        yy = self._scroll_y + y
+        acc = 0
+        for iid, depth, h in rows:
+            if acc <= yy < acc + h:
+                return iid
+            acc += h
+        return ''
+
+    def identify_column(self, x):
+        layout = self._column_layout()
+        for col_id, x0, x1 in layout:
+            if x0 <= x < x1:
+                if col_id == '#0':
+                    return '#0'
+                try:
+                    idx = self._columns.index(col_id) + 1
+                    return f'#{idx}'
+                except Exception:
+                    return col_id
+        return ''
+
+    def bbox(self, item, column=None):
+        item = str(item)
+        rows = self._visible_rows_info()
+        y = 0
+        found = None
+        for iid, depth, h in rows:
+            if iid == item:
+                found = (y, h, depth)
+                break
+            y += h
+        if found is None:
+            return ''
+        y, h, depth = found
+        screen_y = int(y - self._scroll_y)
+        layout = self._column_layout()
+        if column is None:
+            return (0, screen_y, max(1, self._body.winfo_width()), h)
+        col = self._norm_col(column)
+        for col_id, x0, x1 in layout:
+            if col_id == col:
+                return (int(x0), screen_y, int(x1 - x0), h)
+        return ''
+
+    # ---------------- scroll ----------------
+    def yview(self, *args):
+        if not args:
+            view_h = max(1, self._body.winfo_height())
+            total = max(self._content_height, 1)
+            lo = self._scroll_y / total
+            hi = (self._scroll_y + view_h) / total
+            return (max(0.0, min(1.0, lo)), max(0.0, min(1.0, hi)))
+        if args[0] == 'moveto':
+            frac = float(args[1])
+            total = max(self._content_height, 1)
+            view_h = max(1, self._body.winfo_height())
+            self._scroll_y = max(0, min(max(0, total - view_h), frac * total))
+            self._report_scroll()
+            self.redraw(animate=False)
+        elif args[0] == 'scroll':
+            count, what = int(args[1]), args[2]
+            view_h = max(1, self._body.winfo_height())
+            if what == 'units':
+                self._scroll_y += count * self._rowheight
+            else:
+                self._scroll_y += count * view_h
+            total = max(self._content_height, 1)
+            self._scroll_y = max(0, min(max(0, total - view_h), self._scroll_y))
+            self._report_scroll()
+            self.redraw(animate=False)
+
+    def yview_moveto(self, frac):
+        self.yview('moveto', frac)
+
+    def yview_scroll(self, number, what):
+        self.yview('scroll', number, what)
+
+    def _report_scroll(self):
+        if callable(self._yscrollcommand):
+            try:
+                a, b = self.yview()
+                self._yscrollcommand(a, b)
+            except Exception:
+                pass
+
+    def _on_mousewheel(self, event):
+        delta = getattr(event, 'delta', 0) or 0
+        steps = -1 if delta > 0 else (1 if delta < 0 else 0)
+        if steps:
+            self.yview('scroll', steps, 'units')
+        return 'break'
+
+    # ---------------- animation ----------------
+    def _ease_out_cubic(self, t):
+        t = max(0.0, min(1.0, t))
+        return 1 - (1 - t) ** 3
+
+    def _start_toggle_anim(self, iid, expanding):
+        # mark children reveal progress
+        self._row_anim[iid] = {
+            't0': self._now(),
+            'duration': 0.22,
+            'expanding': expanding,
+        }
+        self._animating = True
+        self._tick_anim()
+
+    def _now(self):
+        try:
+            import time
+            return time.perf_counter()
+        except Exception:
+            return 0.0
+
+    def _tick_anim(self):
+        if not self._row_anim:
+            self._animating = False
+            self.redraw(animate=False)
+            return
+        now = self._now()
+        done = []
+        for iid, st in list(self._row_anim.items()):
+            elapsed = now - st['t0']
+            p = self._ease_out_cubic(elapsed / st['duration'])
+            st['progress'] = p
+            if elapsed >= st['duration']:
+                done.append(iid)
+        for iid in done:
+            self._row_anim.pop(iid, None)
+        self.redraw(animate=True)
+        if self._row_anim:
+            try:
+                self._anim_after = self.after(16, self._tick_anim)
+            except Exception:
+                pass
+        else:
+            self._animating = False
+
+    # ---------------- layout / draw ----------------
+    def _visible_rows_info(self):
+        """Return list of (iid, depth, row_height_px) for currently visible rows."""
+        rows = []
+
+        def walk(parent, depth):
+            children = self._root_children if parent == '' else self._nodes.get(parent, {}).get('children', [])
+            for iid in children:
+                rows.append((iid, depth, self._rowheight))
+                node = self._nodes[iid]
+                if node['open'] or iid in self._row_anim:
+                    # during collapse animation still show children with progressive height
+                    anim = self._row_anim.get(iid)
+                    if anim and not anim.get('expanding', True):
+                        # collapsing: show children with shrinking factor
+                        prog = 1.0 - anim.get('progress', 1.0)
+                        if prog > 0.02:
+                            sub = []
+                            def collect(p, d):
+                                for c in self._nodes.get(p, {}).get('children', []):
+                                    sub.append((c, d, max(1, int(self._rowheight * prog))))
+                                    if self._nodes[c]['open']:
+                                        collect(c, d + 1)
+                            collect(iid, depth + 1)
+                            rows.extend(sub)
+                    elif anim and anim.get('expanding', False):
+                        prog = anim.get('progress', 1.0)
+                        sub = []
+                        def collect2(p, d):
+                            for c in self._nodes.get(p, {}).get('children', []):
+                                sub.append((c, d, max(1, int(self._rowheight * prog))))
+                                if self._nodes[c]['open']:
+                                    collect2(c, d + 1)
+                        collect2(iid, depth + 1)
+                        rows.extend(sub)
+                    elif node['open']:
+                        walk(iid, depth + 1)
+
+        walk('', 0)
+        return rows
+
+    def _column_layout(self):
+        """Return [(col_id, x0, x1), ...] for current width."""
+        total_w = max(1, self._body.winfo_width())
+        cols = []
+        if 'tree' in (self._show or '') or True:
+            cols.append('#0')
+        cols.extend(self._columns)
+        widths = []
+        for c in cols:
+            cfg = self._col_cfg.get(c, {})
+            widths.append(max(cfg.get('minwidth', 20), int(cfg.get('width', 100))))
+        s = sum(widths) or 1
+        # scale if needed
+        scale = total_w / s if s > total_w else 1.0
+        layout = []
+        x = 0
+        for c, w in zip(cols, widths):
+            ww = int(w * scale) if scale != 1.0 else w
+            layout.append((c, x, x + ww))
+            x += ww
+        if layout and x < total_w:
+            c, a, b = layout[-1]
+            layout[-1] = (c, a, total_w)
+        return layout
+
+    def _row_colors(self, iid):
+        bg = WINDOWBG
+        fg = TEXTFG
+        node = self._nodes.get(iid, {})
+        for tg in node.get('tags', ()):
+            cfg = self._tag_cfg.get(tg, {})
+            if 'background' in cfg:
+                bg = cfg['background']
+            if 'foreground' in cfg:
+                fg = cfg['foreground']
+        if iid in self._selection:
+            bg = AlphaBlend(HIGHLIGHT, bg, 0.45)
+        return bg, fg
+
+    def redraw(self, animate=False):
+        self._draw_heading()
+        self._draw_body()
+
+    def _draw_heading(self):
+        cv = self._heading_canvas
+        if not cv.winfo_ismapped() and 'headings' not in (self._show or ''):
+            return
+        try:
+            cv.delete('all')
+        except Exception:
+            return
+        h = self._heading_height
+        try:
+            cv.configure(height=h)
+        except Exception:
+            pass
+        layout = self._column_layout()
+        for col_id, x0, x1 in layout:
+            cfg = self._col_cfg.get(col_id, {})
+            text = cfg.get('text', col_id)
+            anchor = cfg.get('anchor_heading', 'center')
+            cv.create_rectangle(x0, 0, x1, h, fill=WINDOWBG, outline=BDCOLOR)
+            ax = (x0 + x1) / 2 if anchor == 'center' else (x0 + 8 if anchor == 'w' else x1 - 8)
+            a = 'center' if anchor == 'center' else ('w' if anchor == 'w' else 'e')
+            cv.create_text(ax, h / 2, text=text, fill=TEXTFG, font=self._heading_font, anchor=a)
+
+    def _draw_body(self):
+        cv = self._body
+        try:
+            cv.delete('all')
+        except Exception:
+            return
+        rows = self._visible_rows_info()
+        self._content_height = sum(h for _, _, h in rows) or 1
+        view_h = max(1, cv.winfo_height())
+        view_w = max(1, cv.winfo_width())
+        # clamp scroll
+        self._scroll_y = max(0, min(self._scroll_y, max(0, self._content_height - view_h)))
+        layout = self._column_layout()
+        y = -self._scroll_y
+        for iid, depth, rh in rows:
+            if y + rh < 0 or y > view_h:
+                y += rh
+                continue
+            bg, fg = self._row_colors(iid)
+            cv.create_rectangle(0, y, view_w, y + rh, fill=bg, outline='')
+            node = self._nodes[iid]
+            for col_id, x0, x1 in layout:
+                if col_id == '#0':
+                    # expander
+                    has_children = bool(node['children'])
+                    indent = 6 + depth * self._indent
+                    cx = x0 + indent + 8
+                    cy = y + rh / 2
+                    if has_children:
+                        # triangle
+                        if node['open']:
+                            pts = [cx - 5, cy - 3, cx + 5, cy - 3, cx, cy + 5]
+                        else:
+                            pts = [cx - 3, cy - 5, cx + 5, cy, cx - 3, cy + 5]
+                        cv.create_polygon(pts, fill=SECONDARYTEXTFG, outline='')
+                        text_x = cx + 12
+                    else:
+                        text_x = cx + 4
+                    text = str(node.get('text', ''))
+                    cv.create_text(text_x, cy, text=text, fill=fg, font=self._font, anchor='w')
+                else:
+                    vals = node.get('values', ())
+                    try:
+                        idx = self._columns.index(col_id)
+                        val = vals[idx] if idx < len(vals) else ''
+                    except Exception:
+                        val = ''
+                    cfg = self._col_cfg.get(col_id, {})
+                    anchor = cfg.get('anchor', 'w')
+                    ax = x0 + 8 if anchor == 'w' else ((x0 + x1) / 2 if anchor == 'center' else x1 - 8)
+                    a = 'w' if anchor == 'w' else ('center' if anchor == 'center' else 'e')
+                    cv.create_text(ax, y + rh / 2, text=str(val), fill=fg, font=self._font, anchor=a)
+            # separator line
+            cv.create_line(0, y + rh - 1, view_w, y + rh - 1, fill=BDCOLOR)
+            y += rh
+        self._report_scroll()
+
+    def _on_configure(self, event=None):
+        self.redraw(animate=False)
+
+    def _hit_indicator(self, x, y):
+        """是否点在展开箭头上。"""
+        iid = self.identify_row(y)
+        if not iid:
+            return None
+        node = self._nodes.get(iid)
+        if not node or not node.get('children'):
+            return None
+        rows = self._visible_rows_info()
+        depth = 0
+        for i, d, h in rows:
+            if i == iid:
+                depth = d
+                break
+        indent = 6 + depth * self._indent
+        # 稍大一点的命中区，避免点边缘被当成内容列
+        if x < indent + 28:
+            return iid
+        return None
+
+    def _on_click(self, event):
+        self._body.focus_set()
+        iid_ind = self._hit_indicator(event.x, event.y)
+        if iid_ind:
+            node = self._nodes.get(iid_ind)
+            if node:
+                self.item(iid_ind, open=not bool(node.get('open')))
+                self.selection_set(iid_ind)
+                self.focus(iid_ind)
+                self._last_indicator_time = self._now()
+                self._last_indicator_iid = iid_ind
+            return 'break'
+        iid = self.identify_row(event.y)
+        if not iid:
+            return
+        if self._selectmode == 'browse':
+            self.selection_set(iid)
+            self.focus(iid)
+
+    def _on_double_click(self, event):
+        # 点在箭头上：只展开/收起，阻止外部把双击当成“打开编辑”
+        iid_ind = self._hit_indicator(event.x, event.y)
+        if iid_ind:
+            node = self._nodes.get(iid_ind)
+            if node:
+                # 单击已切换过一次时，双击会再切一次导致“没动”，此处若刚点过则不再切换
+                recently = False
+                try:
+                    recently = (self._now() - getattr(self, '_last_indicator_time', 0)) < 0.35 and getattr(self, '_last_indicator_iid', None) == iid_ind
+                except Exception:
+                    recently = False
+                if not recently:
+                    self.item(iid_ind, open=not bool(node.get('open')))
+                self.selection_set(iid_ind)
+                self.focus(iid_ind)
+            return 'break'
+        iid = self.identify_row(event.y)
+        if not iid:
+            return
+        node = self._nodes.get(iid)
+        if node and node.get('children'):
+            # 树列文字区双击：与 ttk 类似，切换展开（外部若绑定编辑可再处理）
+            # 不在这里 return break，让业务层自行决定
+            pass
+
+    # bind proxy: allow bind on DTreeview to body canvas for mouse, keep Frame for virtual events
+    def bind(self, sequence=None, func=None, add=None):
+        """绑定事件。鼠标类事件挂到 body Canvas，但回调里 event.widget 仍是本 DTreeview，
+        且 event.x/y 为相对 body 的坐标，以兼容 ttk.Treeview 的用法。
+        """
+        if func is None:
+            if sequence and not str(sequence).startswith('<<'):
+                return self._body.bind(sequence)
+            return super().bind(sequence)
+
+        if sequence and str(sequence).startswith('<<'):
+            return super().bind(sequence, func, add)
+
+        mouse_like = (
+            '<MouseWheel>', '<Button-1>', '<Double-Button-1>', '<ButtonRelease-1>',
+            '<B1-Motion>', '<ButtonPress-1>', '<Configure>',
+            '<Up>', '<Down>', '<Return>', '<Key>', '<KeyPress>', '<KeyRelease>',
+            '<Control-Button-1>', '<Shift-Button-1>',
+        )
+        # 也匹配 Button-1 等带修饰的通用形式
+        seq = str(sequence)
+        is_body = seq in mouse_like or 'Button' in seq or 'MouseWheel' in seq or seq.startswith('<Key')
+
+        if is_body:
+            tree = self
+
+            def _wrapper(event, _fn=func, _tree=tree):
+                try:
+                    event.widget = _tree
+                except Exception:
+                    pass
+                # 若 y 来自含表头的整体，body 事件已是 body 相对坐标，无需改
+                return _fn(event)
+
+            return self._body.bind(sequence, _wrapper, add)
+        return super().bind(sequence, func, add)
+
+    def unbind(self, sequence, funcid=None):
+        try:
+            self._body.unbind(sequence, funcid)
+        except Exception:
+            pass
+        try:
+            super().unbind(sequence, funcid)
+        except Exception:
+            pass
+
+    def focus_set(self):
+        try:
+            self._body.focus_set()
+        except Exception:
+            super().focus_set()
+
+    def winfo_containing(self, rootx, rooty):
+        # 让外部 hit-test 仍落到本控件
+        try:
+            return super().winfo_containing(rootx, rooty)
+        except Exception:
+            return self
 
 
 
