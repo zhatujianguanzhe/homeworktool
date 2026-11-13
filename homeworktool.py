@@ -1,6 +1,7 @@
-VERSION="1.2.1"
+VERSION="1.2.2"
 #一定要放在第一行
 import  os, sys, win32api, webbrowser, json,  datetime,traceback, ctypes, copy,re
+from tkinter import Variable, filedialog, colorchooser
 from laotaoui import *
 import tkinter.font as tkfont
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -31,7 +32,12 @@ DEFAULT_EXPORT_SETTINGS = {
     'EXPORT_GAP_CENTER': 60,
     'EXPORT_FONT_ATTENDANCE': 90,
     'highlight_box': [0, 0, 0, 0],
-    'color_mode':'system'
+    'color_mode': 'system',
+    # 导出背景
+    'background_mode': '纯色',           # 纯色 | 图片
+    'background_color': '#FAF9E6',      # 底色（纯色模式或图片未铺满时的底）
+    'background_image_path': '',
+    'background_stretch_mode': '完全拉伸',  # 完全拉伸|横向拉伸|纵向拉伸|不拉伸
 }
 
 # 高级设置表：说明, 变量名
@@ -222,24 +228,26 @@ class Main():
     def check_update(self,):
         
         update_file_url = "https://github.com/zhatujianguanzhe/homeworktool/blob/main/homeworktool.py"
-
+        update_file_url_backup = "https://hfyzdns.cn/sandbox/homeworktool.py"
         try:
             online_version = get_online_version(update_file_url)
-            
-        except Exception :
-            online_version=None
-            print(f"获取更新失败:{traceback.format_exc()}")
+        except Exception:
+            print(f"从Github获取更新失败:\n=======================\n{traceback.format_exc()}\n=======================\n\n正在从镜像获取更新.")
+            try:
+                online_version = get_online_version(update_file_url_backup)
+            except Exception:
+                online_version = None
+                print(f"从镜像获取更新失败:\n=======================\n{traceback.format_exc()}\n=======================\n")
             
         local_version=get_local_version()
-        print(f"官网版本: {online_version}")
+        print(f"最新版本: {online_version}\n当前版本: {local_version}")
 
-        button_open_update_website=DAlphaButton(self.root,command=lambda:webbrowser.open_new_tab("https://github.com/zhatujianguanzhe/homeworktool/releases"),font=YAHEI_TEXT_FONT)
-        button_open_update_website.place(x=920,y=720,width=260,height=60)
+        button_open_update_website=DAlphaButton(self.frame_open_update_website,command=lambda:webbrowser.open_new_tab("https://github.com/zhatujianguanzhe/homeworktool/releases"),font=YAHEI_TEXT_FONT)
+        button_open_update_website.pack(fill='both')
         
         if online_version==None:
             button_open_update_website.destroy()
-            tk.Label(self.root,bg=WINDOWBG,text="访问Github失败",fg=TEXTFG,font=YAHEI_TEXT_FONT).place(x=920,y=720,width=260,height=60)
-      
+            tk.Label(self.frame_open_update_website,bg=WINDOWBG,text="获取更新失败",fg=TEXTFG,font=YAHEI_TEXT_FONT).pack(fill='both')
         elif online_version[0]> local_version[0]:
             button_open_update_website.config(text=f"发现大更新版本: V{'.'.join([str(x) for x in online_version])}",fg=REDTEXTFG)
         elif online_version[0]==local_version[0] and online_version[1]> local_version[1]:
@@ -248,7 +256,7 @@ class Main():
             button_open_update_website.config(text=f"发现小更新版本: V{'.'.join([str(x) for x in online_version])}",fg=HIGHLIGHT)
         else:
             button_open_update_website.destroy()
-            tk.Label(self.root,bg=WINDOWBG,text="当前已是最新版本",fg=GREENLIGHT,font=YAHEI_TEXT_FONT).place(x=920,y=720,width=260,height=60)
+            tk.Label(self.frame_open_update_website,bg=WINDOWBG,text="当前已是最新版本",fg=GREENLIGHT,font=YAHEI_TEXT_FONT).pack(fill='both')
       
         
 
@@ -308,6 +316,72 @@ class Main():
             return self.export_cfg[key]
         return DEFAULT_EXPORT_SETTINGS.get(key, default)
 
+    def _parse_bg_color(self, value, fallback=(250, 249, 230)):
+        """解析 #RRGGBB / R,G,B / 名称近似；失败返回 fallback."""
+        if value is None:
+            return fallback
+        s = str(value).strip()
+        if not s:
+            return fallback
+        if s.startswith('#') and len(s) >= 7:
+            try:
+                return (int(s[1:3], 16), int(s[3:5], 16), int(s[5:7], 16))
+            except Exception:
+                return fallback
+        if ',' in s:
+            try:
+                parts = [int(float(x.strip())) for x in s.split(',')[:3]]
+                if len(parts) == 3:
+                    return tuple(max(0, min(255, p)) for p in parts)
+            except Exception:
+                return fallback
+        return fallback
+
+    def _make_export_background(self, img_width, img_height):
+        """按设置生成导出用底图 (RGB)."""
+        mode = str(self._cfg('background_mode', '纯色') or '纯色').strip()
+        color = self._parse_bg_color(self._cfg('background_color', '#FAF9E6'))
+        base = Image.new('RGB', (img_width, img_height), color)
+        if mode != '图片':
+            return base
+        path = str(self._cfg('background_image_path', '') or '').strip()
+        if not path or not os.path.isfile(path):
+            return base
+        try:
+            fg = Image.open(path).convert('RGB')
+        except Exception:
+            return base
+        stretch = str(self._cfg('background_stretch_mode', '完全拉伸') or '完全拉伸').strip()
+        fw, fh = fg.size
+        if fw <= 0 or fh <= 0:
+            return base
+        if stretch == '完全拉伸':
+            fg = fg.resize((img_width, img_height), Image.LANCZOS)
+            base.paste(fg, (0, 0))
+        elif stretch == '横向拉伸':
+            # 宽铺满，高按比例，垂直居中
+            new_h = max(1, int(round(img_width * fh / float(fw))))
+            fg = fg.resize((img_width, new_h), Image.LANCZOS)
+            y = (img_height - new_h) // 2
+            base.paste(fg, (0, y))
+        elif stretch == '纵向拉伸':
+            new_w = max(1, int(round(img_height * fw / float(fh))))
+            fg = fg.resize((new_w, img_height), Image.LANCZOS)
+            x = (img_width - new_w) // 2
+            base.paste(fg, (x, 0))
+        else:
+            # 不拉伸：原尺寸居中（超出则裁剪居中区域）
+            if fw >= img_width and fh >= img_height:
+                left = (fw - img_width) // 2
+                top = (fh - img_height) // 2
+                fg = fg.crop((left, top, left + img_width, top + img_height))
+                base.paste(fg, (0, 0))
+            else:
+                x = (img_width - fw) // 2
+                y = (img_height - fh) // 2
+                base.paste(fg, (x, y))
+        return base
+
     def export_homework_image(self):
 
         """将当前作业导出为3840x2160的jpg图片（左右两列,自动换行,字号自适应缩小）"""
@@ -316,13 +390,10 @@ class Main():
 
         # 检查是否有作业
         has_homework = any(len(homework) > 0 for homework in self.homework_data.values())
-        if not has_homework:
-            MessageBoxModern(self.root, title='错误', icon='error', text_blod='没有作业', text='没有作业可以导出.')
-            return
-
+      
         try:
             img_width, img_height = 3840, 2160
-            bg_color = (250, 249, 230)
+            bg_color = self._parse_bg_color(self._cfg('background_color', '#FAF9E6'))
             text_color = (0, 0, 0)
             divider_color = (160, 160, 160)
 
@@ -587,7 +658,7 @@ class Main():
                 return True, left_items, right_items
 
             # 临时 draw 用于测宽（不落在最终图上）
-            probe_img = Image.new('RGB', (img_width, img_height), bg_color)
+            probe_img = self._make_export_background(img_width, img_height)
             probe_draw = ImageDraw.Draw(probe_img)
 
             final_left = final_right = None
@@ -618,7 +689,7 @@ class Main():
                 final_right = final_right or []
 
             # 正式绘制
-            img = Image.new('RGB', (img_width, img_height), bg_color)
+            img = self._make_export_background(img_width, img_height)
             draw = ImageDraw.Draw(img)
 
             # settings 中的高亮区域：在所有文字之前绘制深绿色矩形 [x, y, 宽, 高]
@@ -817,8 +888,8 @@ class Main():
         self.treeview_homework.heading("#0", text="科目", anchor='center')
         self.treeview_homework.heading("homework", text="作业内容", anchor='center')
 
-        self.treeview_homework.column("#0", width=80, anchor='w')
-        self.treeview_homework.column("homework", width=550, anchor='w')
+        self.treeview_homework.column("#0", width=150, anchor='w')
+        self.treeview_homework.column("homework", width=680, anchor='w')
         
         # 绑定展开和收起事件,同时刷新状态文字和行颜色
         def on_treeview_open(event):
@@ -839,8 +910,6 @@ class Main():
         self.treeview_homework.bind('<Double-Button-1>', self.edit_homework)
 
 
-
-
         self.button_edit_homework=DButton(self.root,text='编辑科目',fg=GREENLIGHT,font=YAHEI_TEXT_FONT,command=self.edit_homework)
         self.button_edit_homework.place(x=920,y=20,width=260,height=60)
 
@@ -857,15 +926,14 @@ class Main():
         self.var_attendance_enabled = tk.BooleanVar(value=bool(getattr(self, 'attendance_enabled', False)))
         self.checkbutton_attendance = DCheckbutton(
             self.root,
-            text='自习考勤',
+            text='考勤人数:',
             variable=self.var_attendance_enabled,
             command=self._on_attendance_toggle,
         )
         self.checkbutton_attendance.place(x=920, y=340, width=260, height=30)
 
-        _exp = int(getattr(self, 'expected_attendance', 50) or 50)
-        if _exp < 0:
-            _exp = 0
+        _exp = max(int(getattr(self, 'expected_attendance', 50) or 50),0)
+ 
         self.spinbox_attendance = DTouchSpinbox2(
             self.root, long_press_ms=50, int_only=True, from_=0, to=_exp, increment=1,
         )
@@ -884,6 +952,9 @@ class Main():
 
         self.button_about=DButton(self.root,text='关于',command=self.about,)
         self.button_about.place(x=1020,y=600,width=80,height=30)
+
+        self.frame_open_update_website=tk.Frame(self.root,bg=WINDOWBG,)
+        self.frame_open_update_website.place(x=920,y=720,width=260,height=60)
 
         ConvertPlaceToRelative(self.root)
 
@@ -2902,14 +2973,7 @@ class Main():
         BindTipWindow(button_remove_subject, text='删除科目(默认九科不可删)')
 
 
-
-
         tk.Label(window_settings, bg=TEXTBG).place(x=230, y=170, width=2, height=350)
-
-
-
-
-
 
 
         tk.Label(window_settings, bg=WINDOWBG, fg=TEXTFG, text='选中的科目相关设定(每行一项,直接编辑):', anchor='w').place(x=250, y=170, height=30)
@@ -2951,8 +3015,14 @@ class Main():
         button_password_control=DButton(window_settings,text='账密设置',command=self.password_control)
         button_password_control.place(x=140,y=540,width=100,height=30)
 
+
+        button_background_image_settings=DButton(window_settings,text='背景图像设置',command=lambda: self.open_background_image_settings_window(window_settings))
+        button_background_image_settings.place(x=260,y=540,width=120,height=30)
+
+
         button_clear_history=DButton(window_settings,text='清理历史记录',fg=REDTEXTFG,command=self.clear_homework_history)
-        button_clear_history.place(x=260,y=540,width=120,height=30)
+        button_clear_history.place(x=400,y=540,width=120,height=30)
+
 
         button_ok = DButton(window_settings, text='确定', default='active')
         button_ok.place(x=720, y=540, width=80, height=30)
@@ -3094,7 +3164,7 @@ class Main():
                 window_settings,
                 title='重命名科目',
                 text_blod=f'将「{subj}」重命名为',
-                text='保存后会同步程序数据与配置文件(不改历史记录).',
+                text='保存后会同步程序数据与配置文件,但不改变历史记录.',
                 entrys=[['新名称:', subj]],
             )
             if not result:
@@ -3751,6 +3821,224 @@ class Main():
             pass
         win.wait_window()
 
+    def open_background_image_settings_window(self, parent=None):
+        """导出图片背景：纯色 / 图片 + 拉伸模式，写入 settings 并同步 export_cfg."""
+        parent = parent or self.root
+
+        def close_win(event=None):
+            try:
+                win.destroy()
+            except Exception:
+                pass
+            try:
+                parent.focus()
+            except Exception:
+                pass
+
+        win = tk.Toplevel(parent)
+        win.title('背景图像设置')
+        SetDarkTitleBar(win)
+        w, h = 720, 320
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        win.geometry('%dx%d+%d+%d' % (w, h, (sw - w) // 2, (sh - h) // 2))
+        win['bg'] = WINDOWBG
+        win.protocol('WM_DELETE_WINDOW', close_win)
+        win.bind('<Escape>', close_win)
+        win.focus()
+
+        # 当前值
+        cur_mode = str(self._cfg('background_mode', '纯色') or '纯色')
+        if cur_mode not in ('纯色', '图片'):
+            cur_mode = '纯色'
+        cur_color = str(self._cfg('background_color', '#FAF9E6') or '#FAF9E6')
+        cur_path = str(self._cfg('background_image_path', '') or '')
+        cur_stretch = str(self._cfg('background_stretch_mode', '完全拉伸') or '完全拉伸')
+        if cur_stretch not in ('完全拉伸', '横向拉伸', '纵向拉伸', '不拉伸'):
+            cur_stretch = '完全拉伸'
+
+        tk.Label(win, text='背景图底色:', anchor='w', bg=WINDOWBG, fg=TEXTFG).place(x=20, y=20, width=120, height=30)
+        entry_background_color = DEntry(win)
+        entry_background_color.insert(0, cur_color)
+        entry_background_color.place(x=150, y=20, width=150, height=30)
+
+        preview_swatch = tk.Label(win, bg=cur_color if cur_color.startswith('#') else '#FAF9E6', bd=1, relief='solid')
+        preview_swatch.place(x=310, y=20, width=40, height=30)
+
+        def update_swatch(event=None):
+            c = entry_background_color.get().strip()
+            rgb = self._parse_bg_color(c)
+            try:
+                preview_swatch.config(bg='#{:02x}{:02x}{:02x}'.format(*rgb))
+            except Exception:
+                pass
+
+        entry_background_color.bind('<KeyRelease>', update_swatch, add='+')
+        entry_background_color.bind('<FocusOut>', update_swatch, add='+')
+
+        def pick_color():
+            try:
+                rgb_tuple, hx = colorchooser.askcolor(
+                    color=preview_swatch.cget('bg'),
+                    parent=win,
+                    title='选择背景底色',
+                )
+            except Exception:
+                return
+            if hx:
+                entry_background_color.delete(0, 'end')
+                entry_background_color.insert(0, hx.upper())
+                update_swatch()
+
+        button_pick_color = DButton(win, text='取色', command=pick_color)
+        button_pick_color.place(x=360, y=20, width=60, height=30)
+
+        tk.Label(win, text='背景图模式:', anchor='w', bg=WINDOWBG, fg=TEXTFG).place(x=20, y=70, width=120, height=30)
+        var_background_mode = tk.StringVar(value=cur_mode)
+        entry_background_mode = DCombobutton(win, values=['纯色', '图片'], textvariable=var_background_mode, state='readonly')
+        entry_background_mode.place(x=150, y=70, width=150, height=30)
+
+        tk.Label(win, text='背景图文件:', anchor='w', bg=WINDOWBG, fg=TEXTFG).place(x=20, y=120, width=120, height=30)
+        entry_background_file = DEntry(win)
+        entry_background_file.insert(0, cur_path)
+        entry_background_file.place(x=150, y=120, width=400, height=30)
+
+        def browse_file():
+            path = filedialog.askopenfilename(
+                parent=win,
+                title='选择背景图片',
+                filetypes=[
+                    ('图片文件', '*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.webp'),
+                    ('所有文件', '*.*'),
+                ],
+            )
+            if path:
+                entry_background_file.delete(0, 'end')
+                entry_background_file.insert(0, path)
+
+        button_open_browse_file_dialog = DButton(win, text='浏览', command=browse_file)
+        button_open_browse_file_dialog.place(x=560, y=120, width=60, height=30)
+
+        tk.Label(win, text='拉伸模式:', anchor='w', bg=WINDOWBG, fg=TEXTFG).place(x=20, y=170, width=120, height=30)
+        var_background_stretch_mode = tk.StringVar(value=cur_stretch)
+        entry_background_stretch_mode = DCombobutton(
+            win,
+            values=['完全拉伸', '横向拉伸', '纵向拉伸', '不拉伸'],
+            textvariable=var_background_stretch_mode,
+            state='readonly',
+        )
+        entry_background_stretch_mode.place(x=150, y=170, width=150, height=30)
+
+        tk.Label(
+            win, bg=WINDOWBG, fg=SECONDARYTEXTFG, anchor='w',
+            text='说明:底色在「纯色」模式下作为整图背景;「图片」模式下作为未铺满区域的填充色.',
+        ).place(x=20, y=220, width=680, height=30)
+
+        def refresh_widget_state(event=None, *args):
+            if var_background_mode.get() == '图片':
+                try:
+                    entry_background_file.config(state='normal')
+                except Exception:
+                    pass
+                try:
+                    entry_background_stretch_mode['state'] = 'readonly'
+                except Exception:
+                    try:
+                        entry_background_stretch_mode.config(state='readonly')
+                    except Exception:
+                        pass
+                try:
+                    button_open_browse_file_dialog.config(state='normal')
+                except Exception:
+                    pass
+            else:
+                try:
+                    entry_background_file.config(state='disabled')
+                except Exception:
+                    pass
+                try:
+                    entry_background_stretch_mode['state'] = 'disabled'
+                except Exception:
+                    try:
+                        entry_background_stretch_mode.config(state='disabled')
+                    except Exception:
+                        pass
+                try:
+                    button_open_browse_file_dialog.config(state='disabled')
+                except Exception:
+                    pass
+
+        try:
+            var_background_mode.trace_add('write', refresh_widget_state)
+        except Exception:
+            pass
+        refresh_widget_state()
+        update_swatch()
+
+        def save_and_close():
+            mode = (var_background_mode.get() or '纯色').strip()
+            if mode not in ('纯色', '图片'):
+                mode = '纯色'
+            color = (entry_background_color.get() or '#FAF9E6').strip()
+            # 规范化为 #RRGGBB
+            rgb = self._parse_bg_color(color)
+            color = '#{:02X}{:02X}{:02X}'.format(*rgb)
+            path = (entry_background_file.get() or '').strip()
+            stretch = (var_background_stretch_mode.get() or '完全拉伸').strip()
+            if stretch not in ('完全拉伸', '横向拉伸', '纵向拉伸', '不拉伸'):
+                stretch = '完全拉伸'
+            if mode == '图片' and path and not os.path.isfile(path):
+                MessageBoxModern(
+                    parent=win, title='错误', icon='error',
+                    text_blod='背景图文件不存在',
+                    text=path,
+                )
+                return
+            self.settings['background_mode'] = mode
+            self.settings['background_color'] = color
+            self.settings['background_image_path'] = path
+            self.settings['background_stretch_mode'] = stretch
+            if not hasattr(self, 'export_cfg') or not isinstance(self.export_cfg, dict):
+                self.export_cfg = dict(DEFAULT_EXPORT_SETTINGS)
+            self.export_cfg['background_mode'] = mode
+            self.export_cfg['background_color'] = color
+            self.export_cfg['background_image_path'] = path
+            self.export_cfg['background_stretch_mode'] = stretch
+            try:
+                with open('homeworktool_settings.json', 'w', encoding='utf-8') as f:
+                    json.dump(self.settings, f, ensure_ascii=False, indent=2)
+            except Exception:
+                MessageBoxModern(
+                    parent=win, title='错误', icon='error',
+                    text_blod='保存背景设置失败',
+                    text=traceback.format_exc(),
+                )
+                return
+            close_win()
+
+        button_ok = DButton(win, text='确定', default='active', command=save_and_close)
+        button_ok.place(x=520, y=270, width=80, height=30)
+        try:
+            button_ok.unbind_default_active()
+        except Exception:
+            pass
+        button_cancel = DButton(win, text='取消', command=close_win)
+        button_cancel.place(x=620, y=270, width=80, height=30)
+        try:
+            button_cancel.unbind_default_active()
+        except Exception:
+            pass
+
+        try:
+            ConvertPlaceToRelative(win)
+        except Exception:
+            pass
+        try:
+            win.iconbitmap(f'{libresource}icon.ico')
+        except Exception:
+            pass
+        win.wait_window()
+
+
     def about(self,event=None):
         def set_label_font(label, add_size=3,bold=False):
             old_font = tkfont.Font(font=label.cget("font"))
@@ -3787,7 +4075,7 @@ class Main():
 
 
         tk.Label(self.about_window,bg=WINDOWBG,fg=TEXTFG,text='当前版本:',anchor='w').place(x=20,y=180,width=90,height=30)
-        tk.Label(self.about_window,bg=WINDOWBG,fg=SECONDARYTEXTFG,text=f'V{VERSION}',anchor='w').place(x=110,y=180,height=30)
+        tk.Label(self.about_window,bg=WINDOWBG,fg=SECONDARYTEXTFG,text=f'{VERSION}',anchor='w').place(x=110,y=180,height=30)
 
         tk.Label(self.about_window,bg=TEXTBG,fg=TEXTFG,).place(x=20,y=230,width=760,height=2)
 
