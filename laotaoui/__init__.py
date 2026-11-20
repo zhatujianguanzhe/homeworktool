@@ -78,7 +78,7 @@ TITLEBAR_INACTIVE='#2B2B2B'
 
 
 
-if  IsDarkMode() or 1==1:
+if IsDarkMode() :
     TITLEBARBG='#000000'
     WINDOWBG='#202020'
     TEXTFG="#f1f1f1"
@@ -94,7 +94,7 @@ else:
     WINDOWBG='#f0f0f0'
     TEXTFG="#000000"
     SECONDARYTEXTFG="#2D2D2D"
-    WIDGETBG='#f0f0f0'
+    WIDGETBG='#e1e1e1'
     TEXTBG="#ffffff"
     REDTEXTFG="#c20000"
     BDCOLOR="#ADADAD"
@@ -2823,8 +2823,11 @@ class DSpinbox(tk.Frame):
     def __init__(self, master, int_only=True, increment=1,
                  from_=-float('inf'), to=float('inf'), **kw):
         spinbox_keys = ['width', 'font', 'fg', 'bg', 'justify', 'textvariable',
-                        'insertbackground', 'increment', 'from_', 'to', 'state']
+                        'insertbackground', 'increment', 'from_', 'to']
         spinbox_kwargs = {k: kw.pop(k) for k in list(kw.keys()) if k in spinbox_keys}
+        init_state = kw.pop('state', 'normal')
+        if init_state not in ('normal', 'disabled', 'readonly'):
+            init_state = 'normal'
 
         super().__init__(master, **kw)
 
@@ -2839,6 +2842,7 @@ class DSpinbox(tk.Frame):
         self.increment = int(increment) if int_only else float(increment)
         self.from_ = from_
         self.to = to
+        self._state = init_state
         self._current_bd = 1
         self._border_color = BDCOLOR
         self._focus = False
@@ -2887,20 +2891,14 @@ class DSpinbox(tk.Frame):
         self._last_valid_value = self.Entry.get()
 
         # 容器本身不参与 Tab 焦点，焦点交给内部 Entry
-        try:
-            self.configure(takefocus=0)
-        except Exception:
-            pass
-        try:
-            self.Entry.configure(takefocus=1)
-        except Exception:
-            pass
-        try:
-            self.Frame_DButton.configure(takefocus=0)
-            self.DButton_up.configure(takefocus=0)
-            self.DButton_down.configure(takefocus=0)
-        except Exception:
-            pass
+        self.configure(takefocus=0)
+        self.Entry.configure(takefocus=1)
+        self.Frame_DButton.configure(takefocus=0)
+        self.DButton_up.configure(takefocus=0)
+        self.DButton_down.configure(takefocus=0)
+
+        # 应用初始 state
+        self._apply_state(self._state)
 
         widgets = (self, self.Entry, self.Frame_DButton, self.DButton_up, self.DButton_down)
         for w in widgets:
@@ -3018,7 +3016,7 @@ class DSpinbox(tk.Frame):
             return False
 
     def up_number(self, beep=True):
-        if getattr(self, '_state', 'normal') == 'disabled':
+        if self._state == 'disabled':
             return
         temp_number = self.Entry.get()
         if temp_number in ('', '-', '.', '-.'):
@@ -3039,7 +3037,7 @@ class DSpinbox(tk.Frame):
         self.insert('end', new_value)
 
     def down_number(self, beep=True):
-        if getattr(self, '_state', 'normal') == 'disabled':
+        if self._state == 'disabled':
             return
         temp_number = self.Entry.get()
         if temp_number in ('', '-', '.', '-.'):
@@ -3090,7 +3088,7 @@ class DSpinbox(tk.Frame):
         win32api.MessageBeep()
 
     def mousewheel(self, event):
-        if getattr(self, '_state', 'normal') == 'disabled':
+        if self._state == 'disabled':
             return
         delta = event.delta if hasattr(event, 'delta') else 0
         if delta > 0:
@@ -3100,9 +3098,71 @@ class DSpinbox(tk.Frame):
             for i in range(-int(delta / 120)):
                 self.down_number(beep=False)
 
+    def _apply_state(self, value):
+        """同步 state 到 Entry 与上下按钮. 支持 normal / disabled / readonly."""
+        if value not in ('normal', 'disabled', 'readonly'):
+            value = 'normal'
+        self._state = value
+        if value == 'disabled':
+            entry_state, btn_state, tf = 'disabled', 'disabled', 0
+        elif value == 'readonly':
+            entry_state, btn_state, tf = 'readonly', 'normal', 0
+        else:
+            entry_state, btn_state, tf = 'normal', 'normal', 1
+        self.Entry.configure(state=entry_state, takefocus=tf)
+        self.DButton_up.configure(state=btn_state)
+        self.DButton_down.configure(state=btn_state)
+        self.configure(takefocus=0)
 
+    @property
+    def state(self):
+        return self._state
 
+    @state.setter
+    def state(self, value):
+        self._apply_state(value)
 
+    def configure(self, cnf=None, **kw):
+        # 查询: config('state') / configure('state')
+        if isinstance(cnf, str) and not kw:
+            if cnf == 'state':
+                return self._state
+            return super().configure(cnf)
+        if isinstance(cnf, dict):
+            kw = {**cnf, **kw}
+            cnf = None
+        if 'state' in kw:
+            self._apply_state(kw.pop('state'))
+        if 'from_' in kw:
+            self.from_ = kw.pop('from_')
+        if 'to' in kw:
+            self.to = kw.pop('to')
+        if 'increment' in kw:
+            inc = kw.pop('increment')
+            self.increment = int(inc) if self.int_only else float(inc)
+        if cnf is None and not kw:
+            return None
+        if cnf is None:
+            cnf = {}
+        return super().configure(cnf, **kw)
+
+    config = configure
+
+    def cget(self, key):
+        if key == 'state':
+            return self._state
+        return super().cget(key)
+
+    def __setitem__(self, key, value):
+        if key == 'state':
+            self._apply_state(value)
+            return
+        super().__setitem__(key, value)
+
+    def __getitem__(self, key):
+        if key == 'state':
+            return self._state
+        return super().__getitem__(key)
 
 
 class DTouchSpinbox(DSpinbox):
@@ -3484,8 +3544,8 @@ class DTouchSpinbox2(DSpinbox):
         super().__init__(master, int_only=int_only, increment=increment,
                          from_=from_, to=to, **kw)
         self._long_press_ms = int(long_press_ms)
-        self._visible_rows = 5
-        self._row_h = 32
+        self._visible_rows = visible_rows
+        self._row_h = 6*visible_rows+2
         self._press_after = None
         self._picker = None
         self._canvas = None
@@ -3512,37 +3572,32 @@ class DTouchSpinbox2(DSpinbox):
             w.bind('<ButtonPress-1>', self._on_press, add='+')
             w.bind('<ButtonRelease-1>', self._on_release, add='+')
             w.bind('<B1-Motion>', self._on_drag, add='+')
-        try:
-            self.DButton_up.bind('<ButtonPress-1>', self._on_press, add='+')
-            self.DButton_up.bind('<ButtonRelease-1>', self._on_release, add='+')
-            self.DButton_up.bind('<B1-Motion>', self._on_drag, add='+')
-            self.DButton_down.bind('<ButtonPress-1>', self._on_press, add='+')
-            self.DButton_down.bind('<ButtonRelease-1>', self._on_release, add='+')
-            self.DButton_down.bind('<B1-Motion>', self._on_drag, add='+')
-        except Exception:
-            pass
+        
+        self.DButton_up.bind('<ButtonPress-1>', self._on_press, add='+')
+        self.DButton_up.bind('<ButtonRelease-1>', self._on_release, add='+')
+        self.DButton_up.bind('<B1-Motion>', self._on_drag, add='+')
+        self.DButton_down.bind('<ButtonPress-1>', self._on_press, add='+')
+        self.DButton_down.bind('<ButtonRelease-1>', self._on_release, add='+')
+        self.DButton_down.bind('<B1-Motion>', self._on_drag, add='+')
+     
 
     # ---------- 工具 ----------
     def _read_current_value(self):
-        raw = ''
         try:
             raw = self.Entry.get().strip()
-        except Exception:
-            try:
-                raw = self.get().strip()
-            except Exception:
-                raw = ''
+        except tk.TclError:
+            raw = ''
         if raw in ('', '-', '.', '-.'):
             lo = self.from_
             if lo not in (float('-inf'), float('inf')):
                 try:
                     return int(lo) if self.int_only else float(lo)
-                except Exception:
+                except (TypeError, ValueError):
                     pass
             return 0
         try:
             return int(float(raw)) if self.int_only else float(raw)
-        except Exception:
+        except (TypeError, ValueError):
             return 0
 
     def _build_values(self):
@@ -3640,7 +3695,7 @@ class DTouchSpinbox2(DSpinbox):
 
     # ---------- 按下 / 拖动 / 松开 ----------
     def _on_press(self, event=None):
-        if getattr(self, '_state', 'normal') == 'disabled':
+        if self._state == 'disabled':
             return
         if self._picker_open:
             # 已打开时按下：中断惯性，进入跟手拖动
@@ -3653,24 +3708,15 @@ class DTouchSpinbox2(DSpinbox):
         self._drag_last_y = event.y_root if event is not None else None
         self._drag_last_t = self._now()
         self._cancel_press_timer()
-        try:
-            self._press_after = self.after(self._long_press_ms, self._open_picker)
-        except Exception:
-            self._press_after = None
+        self._press_after = self.after(self._long_press_ms, self._open_picker)
 
     def _now(self):
-        try:
-            import time
-            return time.perf_counter()
-        except Exception:
-            return 0.0
+        import time
+        return time.perf_counter()
 
     def _cancel_press_timer(self):
         if self._press_after is not None:
-            try:
-                self.after_cancel(self._press_after)
-            except Exception:
-                pass
+            self.after_cancel(self._press_after)
             self._press_after = None
 
     def _on_drag(self, event):
@@ -3702,15 +3748,12 @@ class DTouchSpinbox2(DSpinbox):
         if not self._picker_open:
             return
         # 若已越界：回弹目标锁定为最顶/最底，而不是松手前的中间某一项
-        try:
-            lo, hi = self._range_offset()
-            if self._offset < lo - 0.5:
-                self._rubber_target = lo  # 最顶端（最小项居中）
-            elif self._offset > hi + 0.5:
-                self._rubber_target = hi  # 最底端（最大项居中）
-            else:
-                self._rubber_target = None
-        except Exception:
+        lo, hi = self._range_offset()
+        if self._offset < lo - 0.5:
+            self._rubber_target = lo  # 最顶端（最小项居中）
+        elif self._offset > hi + 0.5:
+            self._rubber_target = hi  # 最底端（最大项居中）
+        else:
             self._rubber_target = None
         self._start_inertia()
 
@@ -3758,10 +3801,7 @@ class DTouchSpinbox2(DSpinbox):
                 self._finish_and_close()
                 return
             self._redraw()
-            try:
-                self._anim_after = self.after(16, self._tick_inertia)
-            except Exception:
-                pass
+            self._anim_after = self.after(16, self._tick_inertia)
             return
 
         # 范围内惯性
@@ -3774,10 +3814,7 @@ class DTouchSpinbox2(DSpinbox):
             else:
                 self._velocity *= self._friction
             self._redraw()
-            try:
-                self._anim_after = self.after(16, self._tick_inertia)
-            except Exception:
-                pass
+            self._anim_after = self.after(16, self._tick_inertia)
             return
 
         # 速度已很低：吸附到最近整数行
@@ -3791,10 +3828,7 @@ class DTouchSpinbox2(DSpinbox):
             if abs(target_off - self._offset) < 0.5:
                 self._offset = target_off
             self._redraw()
-            try:
-                self._anim_after = self.after(16, self._tick_inertia)
-            except Exception:
-                pass
+            self._anim_after = self.after(16, self._tick_inertia)
             return
 
         # 吸附完成 → 关闭并提交
@@ -3805,10 +3839,7 @@ class DTouchSpinbox2(DSpinbox):
 
     def _cancel_anim(self):
         if self._anim_after is not None:
-            try:
-                self.after_cancel(self._anim_after)
-            except Exception:
-                pass
+            self.after_cancel(self._anim_after)
             self._anim_after = None
 
     # ---------- 绘制 ----------
@@ -3816,15 +3847,9 @@ class DTouchSpinbox2(DSpinbox):
         cv = self._canvas
         if cv is None or not self._values:
             return
-        try:
-            cv.delete('all')
-        except Exception:
-            return
-        try:
-            w = int(cv.winfo_width())
-            h = int(cv.winfo_height())
-        except Exception:
-            return
+        cv.delete('all')
+        w = int(cv.winfo_width())
+        h = int(cv.winfo_height())
         if w <= 1:
             w = 120
         if h <= 1:
@@ -3866,7 +3891,7 @@ class DTouchSpinbox2(DSpinbox):
     def _open_picker(self):
         if not self._press_active or self._picker_open:
             return
-        if getattr(self, '_state', 'normal') == 'disabled':
+        if self._state == 'disabled':
             return
 
         cur_v = self._read_current_value()
@@ -3879,41 +3904,26 @@ class DTouchSpinbox2(DSpinbox):
         self._inertia_running = False
         self._rubber_target = None
 
-        try:
-            self.update_idletasks()
-            x = self.winfo_rootx()
-            y = self.winfo_rooty() + self.winfo_height() + 4
-            w = max(self.winfo_width(), 100)
-        except Exception:
-            x, y, w = 100, 100, 120
+        self.update_idletasks()
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height() + 4
+        w = max(self.winfo_width(), 100)
 
         h = self._row_h * self._visible_rows
 
         picker = tk.Toplevel(self)
         picker.overrideredirect(True)
         picker.resizable(False, False)
-        try:
-            picker.attributes('-topmost', True)
-        except Exception:
-            pass
+        picker.attributes('-topmost', True)
         picker.configure(bg=WIDGETBG, bd=0, highlightthickness=0)
-        try:
-            sw, sh = picker.winfo_screenwidth(), picker.winfo_screenheight()
-            if x + w > sw:
-                x = max(0, sw - w - 4)
-            if y + h > sh:
-                y = max(0, self.winfo_rooty() - h - 4)
-        except Exception:
-            pass
+        sw, sh = picker.winfo_screenwidth(), picker.winfo_screenheight()
+        if x + w > sw:
+            x = max(0, sw - w - 4)
+        if y + h > sh:
+            y = max(0, self.winfo_rooty() - h - 4)
         picker.geometry(f'{w}x{h}+{x}+{y}')
 
-        try:
-            SetBorder(picker, mode='place', bd=1, focusbd=1, color=BDCOLOR, focuscolor=HIGHLIGHT)
-        except Exception:
-            try:
-                SetBorder(picker, bd=1, focusbd=1, color=BDCOLOR, focuscolor=HIGHLIGHT)
-            except Exception:
-                pass
+        SetBorder(picker, mode='place', bd=1, focusbd=1, color=BDCOLOR, focuscolor=HIGHLIGHT)
 
         cv = tk.Canvas(
             picker, bg=WIDGETBG, bd=0, highlightthickness=0,
@@ -3935,16 +3945,10 @@ class DTouchSpinbox2(DSpinbox):
         picker.bind('<Escape>', lambda e: self._force_close(), add='+')
 
         def _first_draw():
-            try:
-                picker.update_idletasks()
-                self._redraw()
-            except Exception:
-                pass
-        try:
-            picker.after_idle(_first_draw)
-            picker.after(10, _first_draw)
-        except Exception:
-            _first_draw()
+            picker.update_idletasks()
+            self._redraw()
+        picker.after_idle(_first_draw)
+        picker.after(10, _first_draw)
 
     def _on_wheel(self, event):
         if not self._picker_open:
@@ -3965,23 +3969,12 @@ class DTouchSpinbox2(DSpinbox):
     def _finish_and_close(self):
         """惯性/吸附结束后提交数值并关窗。"""
         val = None
-        try:
-            idx = self._index_from_offset(self._offset)
-            if self._values and 0 <= idx < len(self._values):
-                val = self._values[idx]
-        except Exception:
-            val = None
+        idx = self._index_from_offset(self._offset)
+        val = self._values[idx] if self._values and 0 <= idx < len(self._values) else None
         self._destroy_picker()
         if val is not None:
-            try:
-                self.delete(0, 'end')
-                self.insert('end', str(val))
-            except Exception:
-                try:
-                    self.Entry.delete(0, 'end')
-                    self.Entry.insert('end', str(val))
-                except Exception:
-                    pass
+            self.delete(0, 'end')
+            self.insert('end', str(val))
 
     def _force_close(self):
         """Esc：不提交，直接关。"""
@@ -3999,11 +3992,8 @@ class DTouchSpinbox2(DSpinbox):
         self._picker = None
         self._canvas = None
         self._drag_last_y = None
-        try:
-            if picker is not None:
-                picker.destroy()
-        except Exception:
-            pass
+        if picker is not None:
+            picker.destroy()
 
 
 
