@@ -1,7 +1,7 @@
-VERSION="1.2.2"
+VERSION="1.2.4"
 #一定要放在第一行
 import  os, sys, win32api, webbrowser, json,  datetime,traceback, ctypes, copy,re
-from tkinter import Variable, filedialog, colorchooser
+from tkinter import  filedialog, colorchooser
 from laotaoui import *
 import tkinter.font as tkfont
 from PIL import Image, ImageDraw, ImageFont, ImageTk
@@ -176,7 +176,7 @@ class Main():
         try:
             with open('homeworktool_settings.json','r',encoding='utf-8') as f:
                 self.settings = json.load(f)
-        except:
+        except Exception:
             if MessageBoxModern(parent=None,title='警告',text=f"{traceback.format_exc()}",text_blod='读取设置文件失败,是否需要重新创建配置文件?',icon='warning',button_mode=2):
                 with open('homeworktool_settings.json','w+',encoding='utf-8') as f:
                     f.write('{"password":{"admin":"","default":""},"highlight_box":[0,0,0,0],"EXPORT_FONT_SUBJECT":120,"EXPORT_FONT_CONTENT":100,"EXPORT_FONT_DATE":110,"EXPORT_FONT_ATTENDANCE":90,"EXPORT_FONT_SUBJECT_MIN":40,"EXPORT_FONT_CONTENT_MIN":32,"EXPORT_FONT_NAME":"宋体","EXPORT_FONT_FALLBACK_NAMES":["宋体","微软雅黑","MicrosoftYaHei","黑体","SimHei","SegoeUISymbol","SegoeUI","ArialUnicodeMS","Arial"],"EXPORT_LINE_SPACING_CONTENT":10,"EXPORT_LINE_SPACING_SUBJECT":15,"EXPORT_SUBJECT_GAP":32,"EXPORT_MARGIN_X":300,"EXPORT_MARGIN_BOTTOM":150,"EXPORT_DATE_Y":120,"EXPORT_START_Y":280,"EXPORT_GAP_CENTER":60,"YAHEI_TEXT_FONT":"TkDefaultFont","disable_highdpi_scaling":true,"auto_set_desktop_background":true,"expected_attendance":50,"attendance_enabled":false}')
@@ -187,7 +187,7 @@ class Main():
         try:
             with open('homeworktool_template.json','r',encoding='utf-8') as f:
                 self.homework_template = json.load(f)
-        except:
+        except Exception:
             MessageBoxModern(parent=None,title='警告',text=f"{traceback.format_exc()}",text_blod='读取作业模板文件失败,不影响运行.',icon='warning',)      
             self.homework_template = {}
      
@@ -195,7 +195,7 @@ class Main():
         try:
             with open('homeworktool_previous_homework.json','r',encoding='utf-8') as f:
                 self.previous_homework = json.load(f)
-        except:
+        except Exception:
             MessageBoxModern(parent=None,title='警告',text=f"{traceback.format_exc()}",text_blod='读取历史记录文件失败,不影响运行.',icon='warning',)
             self.previous_homework = {}
 
@@ -282,16 +282,12 @@ class Main():
 
         self.disable_highdpi_scaling = bool(self.settings.get('disable_highdpi_scaling', False))
         if self.disable_highdpi_scaling:
-            try:
-                SetDPI()
-            except Exception:
-                pass
-
+            SetDPI()
         self.auto_set_desktop_background = bool(self.settings.get('auto_set_desktop_background', True))
 
         try:
             self.expected_attendance = int(self.settings.get('expected_attendance', 50))
-        except Exception:
+        except (TypeError, ValueError):
             self.expected_attendance = 50
         self.settings['expected_attendance'] = self.expected_attendance
         self.attendance_enabled = bool(self.settings.get('attendance_enabled', False))
@@ -326,14 +322,14 @@ class Main():
         if s.startswith('#') and len(s) >= 7:
             try:
                 return (int(s[1:3], 16), int(s[3:5], 16), int(s[5:7], 16))
-            except Exception:
+            except ValueError:
                 return fallback
         if ',' in s:
             try:
                 parts = [int(float(x.strip())) for x in s.split(',')[:3]]
                 if len(parts) == 3:
                     return tuple(max(0, min(255, p)) for p in parts)
-            except Exception:
+            except (TypeError, ValueError):
                 return fallback
         return fallback
 
@@ -493,7 +489,7 @@ class Main():
                     mask = font.getmask(char)
                     box = mask.getbbox()
                     return box is not None
-                except Exception:
+                except (TypeError, ValueError, OSError):
                     return False
 
             def pick_font(char, font_chain):
@@ -693,66 +689,55 @@ class Main():
             draw = ImageDraw.Draw(img)
 
             # settings 中的高亮区域：在所有文字之前绘制深绿色矩形 [x, y, 宽, 高]
-            try:
-                hb = self._cfg('highlight_box') or self.settings.get('highlight_box')
-                if hb and len(hb) >= 4:
-                    hx, hy, hw, hh = int(hb[0]), int(hb[1]), int(hb[2]), int(hb[3])
-                    if hw > 0 and hh > 0:
-                        highlight_fill = (0, 110, 40)  # 深绿色
-                        draw.rectangle(
-                            [hx, hy, hx + hw, hy + hh],
-                            fill=highlight_fill,
-                            outline=None,
-                        )
-            except Exception:
-                pass
-
-            # 日期居中（缺字回退）
+            hb = self._cfg('highlight_box') or self.settings.get('highlight_box')
+            if hb and len(hb) >= 4:
+                hx, hy, hw, hh = int(hb[0]), int(hb[1]), int(hb[2]), int(hb[3])
+                if hw > 0 and hh > 0:
+                    highlight_fill = (0, 110, 40)  # 深绿色
+                    draw.rectangle(
+                        [hx, hy, hx + hw, hy + hh],
+                        fill=highlight_fill,
+                        outline=None,
+                    )
             draw_text_mixed(draw, (center_x, date_y), date, text_color, font_date, anchor='mt')
 
             # 自习考勤：标题居中后,在标题右侧单行黑底白字（字号取 EXPORT_FONT_ATTENDANCE）
-            try:
-                att_on = False
-                try:
-                    att_on = bool(self.var_attendance_enabled.get())
-                except Exception:
-                    att_on = bool(getattr(self, 'attendance_enabled', False))
-                if att_on:
-                    exp_n = int(getattr(self, 'expected_attendance', 50) or 50)
-                    act_n = self._get_actual_attendance_from_ui()
-                    self._save_attendance_record(date=date, expected=exp_n, actual=act_n)
-                    att_size = int(self._cfg('EXPORT_FONT_ATTENDANCE', 90) or 90)
-                    if att_size < 12:
-                        att_size = 12
-                    font_att = load_font_chain(att_size)
-                    att_text = f'应到:{exp_n}人  实到:{act_n}人'
-                    tw = text_width(draw, att_text, font_att)
-                    th = text_height(draw, att_text, font_att)
-                    pad_x, pad_y = 20, 12
-                    box_w = tw + pad_x * 2
-                    box_h = th + pad_y * 2
-                    date_w = text_width(draw, date, font_date)
-                    date_h = text_height(draw, date, font_date)
-                    gap_after_title = max(40, size_date // 2)
-                    box_x1 = int(center_x + date_w / 2 + gap_after_title)
-                    margin_right = int(self._cfg('EXPORT_MARGIN_X'))
-                    if box_x1 + box_w > img_width - margin_right:
-                        box_x1 = img_width - margin_right - box_w
-                    box_x2 = box_x1 + box_w
-                    box_cy = date_y + date_h / 2.0
-                    box_y1 = int(box_cy - box_h / 2.0)
-                    if box_y1 < 10:
-                        box_y1 = 10
-                    box_y2 = box_y1 + box_h
-                    draw.rectangle([box_x1, box_y1, box_x2, box_y2], fill=(0, 0, 0), outline=None)
-                    draw_text_mixed(
-                        draw, (box_x1 + pad_x, box_y1 + pad_y),
-                        att_text, (255, 255, 255), font_att,
-                    )
-            except Exception:
-                pass
-
-            # 中间灰色虚线（从内容区顶部到底部）
+            if hasattr(self, 'var_attendance_enabled'):
+                att_on = bool(self.var_attendance_enabled.get())
+            else:
+                att_on = bool(getattr(self, 'attendance_enabled', False))
+            if att_on:
+                exp_n = int(getattr(self, 'expected_attendance', 50) or 50)
+                act_n = self._get_actual_attendance_from_ui()
+                self._save_attendance_record(date=date, expected=exp_n, actual=act_n)
+                att_size = int(self._cfg('EXPORT_FONT_ATTENDANCE', 90) or 90)
+                if att_size < 12:
+                    att_size = 12
+                font_att = load_font_chain(att_size)
+                att_text = f'应到:{exp_n}人  实到:{act_n}人'
+                tw = text_width(draw, att_text, font_att)
+                th = text_height(draw, att_text, font_att)
+                pad_x, pad_y = 20, 12
+                box_w = tw + pad_x * 2
+                box_h = th + pad_y * 2
+                date_w = text_width(draw, date, font_date)
+                date_h = text_height(draw, date, font_date)
+                gap_after_title = max(40, size_date // 2)
+                box_x1 = int(center_x + date_w / 2 + gap_after_title)
+                margin_right = int(self._cfg('EXPORT_MARGIN_X'))
+                if box_x1 + box_w > img_width - margin_right:
+                    box_x1 = img_width - margin_right - box_w
+                box_x2 = box_x1 + box_w
+                box_cy = date_y + date_h / 2.0
+                box_y1 = int(box_cy - box_h / 2.0)
+                if box_y1 < 10:
+                    box_y1 = 10
+                box_y2 = box_y1 + box_h
+                draw.rectangle([box_x1, box_y1, box_x2, box_y2], fill=(0, 0, 0), outline=None)
+                draw_text_mixed(
+                    draw, (box_x1 + pad_x, box_y1 + pad_y),
+                    att_text, (255, 255, 255), font_att,
+                )
             dash_len, gap_len = 24, 16
             y = start_y - 20
             while y < img_height - margin_bottom:
@@ -770,17 +755,14 @@ class Main():
                 if style_inverse:
                     # 反色：黑底；前景默认白，若有颜色标记则用该颜色
                     fill = style_color if style_color else (255, 255, 255)
-                    try:
-                        th = text_height(draw, text if text else '中', font)
-                        tw = text_width(draw, text if text else '', font)
-                        pad = 4
-                        draw.rectangle(
-                            [x - pad, y - pad, x + tw + pad, y + th + pad],
-                            fill=(0, 0, 0),
-                            outline=None,
-                        )
-                    except Exception:
-                        pass
+                    th = text_height(draw, text if text else '中', font)
+                    tw = text_width(draw, text if text else '', font)
+                    pad = 4
+                    draw.rectangle(
+                        [x - pad, y - pad, x + tw + pad, y + th + pad],
+                        fill=(0, 0, 0),
+                        outline=None,
+                    )
                 else:
                     fill = style_color if style_color else text_color
                 draw_text_mixed(draw, (x, y), text, fill, font, bold=bool(style_bold))
@@ -812,13 +794,20 @@ class Main():
                     wallpaper_err = str(e)
 
                 if not wallpaper_ok:
-                    MessageBoxModern(
-                        parent=self.root, title='成功',
-                        text=f'图片已保存至: {filepath}\n但设为桌面背景失败,详细信息:\n{wallpaper_err}',
-                        text_blod='导出成功,设壁纸失败', icon='warning'
-                    )
+                    if getattr(self, '_cli_mode', False):
+                        print(f'[警告] 图片已保存至: {filepath}')
+                        print(f'[警告] 设为桌面背景失败: {wallpaper_err}')
+                    else:
+                        MessageBoxModern(
+                            parent=self.root, title='成功',
+                            text=f'图片已保存至: {filepath}\n但设为桌面背景失败,详细信息:\n{wallpaper_err}',
+                            text_blod='导出成功,设壁纸失败', icon='warning'
+                        )
 
         except Exception:
+            if getattr(self, '_cli_mode', False):
+                print(f'[错误] 导出作业图片失败:\n{traceback.format_exc()}')
+                raise
             MessageBoxModern(parent=self.root, title='错误', text=traceback.format_exc(), text_blod='导出作业图片失败', icon='error')
 
     def layout_window(self,):
@@ -960,32 +949,19 @@ class Main():
 
     def exit_app(self,):
         # 退出时保存今日实到考勤（若已勾选）
-        try:
-            if bool(self.var_attendance_enabled.get()):
-                self._save_attendance_record()
-        except Exception:
-            pass
+        if bool(self.var_attendance_enabled.get()):
+            self._save_attendance_record()
         self.save_homework_history(silent=True)
         self.root.destroy()
         sys.exit()
 
     def _set_attendance_spinbox_state(self, enabled):
         """考勤 Spinbox：勾选时 normal,未勾选时 disabled."""
-        try:
-            state = 'normal' if enabled else 'disabled'
-            self.spinbox_attendance.config(state=state)
-            try:
-                self.spinbox_attendance.Entry.config(state=state)
-            except Exception:
-                pass
-            try:
-                self.spinbox_attendance.DButton_up.config(state=state)
-                self.spinbox_attendance.DButton_down.config(state=state)
-            except Exception:
-                pass
-        except Exception:
-            pass
-
+        state = 'normal' if enabled else 'disabled'
+        
+        self.spinbox_attendance.config(state=state)
+       # self.spinbox_attendance.DButton_up.config(state=state)
+      #  self.spinbox_attendance.DButton_down.config(state=state)
     def _on_attendance_toggle(self):
         """主界面自习考勤勾选变化时写入 settings（仅开关,不含实到人数）."""
         enabled = bool(self.var_attendance_enabled.get())
@@ -1003,77 +979,38 @@ class Main():
         # 先保证 history 已加载
         if not isinstance(getattr(self, 'attendance_history', None), dict):
             self.attendance_history = {}
-            try:
-                with open('homeworktool_attendance.json', 'r', encoding='utf-8') as f:
-                    loaded = json.load(f)
-                if isinstance(loaded, dict):
-                    self.attendance_history = loaded
-            except Exception:
-                pass
-
+            with open('homeworktool_attendance.json', 'r', encoding='utf-8') as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                self.attendance_history = loaded
         spin_val = int(getattr(self, 'expected_attendance', 50) or 50)
-        try:
-            rec = self.attendance_history.get(date)
-            if isinstance(rec, dict) and 'actual' in rec:
+        rec = self.attendance_history.get(date)
+        if isinstance(rec, dict) and 'actual' in rec:
+            try:
                 spin_val = int(rec.get('actual'))
-            elif isinstance(rec, (int, float)):
-                spin_val = int(rec)
-        except Exception:
-            spin_val = int(getattr(self, 'expected_attendance', 50) or 50)
+            except (TypeError, ValueError):
+                pass
+        elif isinstance(rec, (int, float)):
+            spin_val = int(rec)
 
         # 写入 Spinbox（即使当前 disabled 也要先 normal 再写回状态）
-        was_on = False
-        try:
-            was_on = bool(self.var_attendance_enabled.get())
-        except Exception:
-            was_on = bool(getattr(self, 'attendance_enabled', False))
-        try:
-            self.spinbox_attendance.config(state='normal')
-            try:
-                self.spinbox_attendance.Entry.config(state='normal')
-            except Exception:
-                pass
-            self.spinbox_attendance.delete(0, tk.END)
-            self.spinbox_attendance.insert(0, str(int(spin_val)))
-        except Exception:
-            try:
-                self.spinbox_attendance.delete(0, tk.END)
-                self.spinbox_attendance.insert(0, str(int(spin_val)))
-            except Exception:
-                pass
+        was_on = bool(self.var_attendance_enabled.get()) if hasattr(self, 'var_attendance_enabled') else bool(getattr(self, 'attendance_enabled', False))
+       
+        self.spinbox_attendance.config(state='normal')
+        self.spinbox_attendance.delete(0, tk.END)
+        self.spinbox_attendance.insert(0, str(int(spin_val)))
         self._set_attendance_spinbox_state(was_on)
 
     def _get_actual_attendance_from_ui(self):
         """读取主界面实到人数 Spinbox,失败返回 0；允许负数；disabled 时也能读."""
-        val = 0
-        try:
-            # disabled 状态下部分控件 get 可能异常,临时打开再读
-            was_disabled = False
-            try:
-                st = str(self.spinbox_attendance.cget('state'))
-                was_disabled = st in ('disabled', 'Disable', 'DISABLED')
-            except Exception:
-                was_disabled = False
-            if was_disabled:
-                try:
-                    self.spinbox_attendance.config(state='normal')
-                    try:
-                        self.spinbox_attendance.Entry.config(state='normal')
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-            try:
-                val = int(float(self.spinbox_attendance.get()))
-            except Exception:
-                try:
-                    val = int(float(self.spinbox_attendance.Entry.get()))
-                except Exception:
-                    val = 0
-            if was_disabled:
-                self._set_attendance_spinbox_state(False)
-        except Exception:
-            val = 0
+        was_disabled = str(self.spinbox_attendance.cget('state')).lower() == 'disabled'
+        if was_disabled:
+            self.spinbox_attendance.config(state='normal')
+       
+        val = int(float(self.spinbox_attendance.get()))
+ 
+        if was_disabled:
+            self._set_attendance_spinbox_state(False)
         return val
 
     def _save_attendance_record(self, date=None, expected=None, actual=None):
@@ -1083,33 +1020,24 @@ class Main():
         if expected is None:
             try:
                 expected = int(getattr(self, 'expected_attendance', 50) or 50)
-            except Exception:
+            except (TypeError, ValueError):
                 expected = 50
         if actual is None:
             actual = self._get_actual_attendance_from_ui()
         try:
             expected = int(expected)
-        except Exception:
+        except (TypeError, ValueError):
             expected = 50
         try:
             actual = int(actual)
-        except Exception:
+        except (TypeError, ValueError):
             actual = 0
 
-        history = {}
-        try:
-            if isinstance(getattr(self, 'attendance_history', None), dict):
-                history = dict(self.attendance_history)
-        except Exception:
-            history = {}
-        try:
-            with open('homeworktool_attendance.json', 'r', encoding='utf-8') as f:
-                loaded = json.load(f)
-            if isinstance(loaded, dict):
-                history = loaded
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            pass
-
+        history = dict(self.attendance_history) if isinstance(getattr(self, 'attendance_history', None), dict) else {}
+        with open('homeworktool_attendance.json', 'r', encoding='utf-8') as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            history = loaded
         history[date] = {
             'expected': expected,
             'actual': actual,
@@ -1123,12 +1051,8 @@ class Main():
             return False
 
     def _save_settings_file_quiet(self):
-        try:
-            with open('homeworktool_settings.json', 'w', encoding='utf-8') as f:
-                json.dump(self.settings, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
-
+        with open('homeworktool_settings.json', 'w', encoding='utf-8') as f:
+            json.dump(self.settings, f, ensure_ascii=False, indent=2)
     def get_subject_password(self, subject):
         """获取科目对应密码;无独立条目时回退 default"""
         pwd_map = self.settings.get('password', {})
@@ -1151,6 +1075,8 @@ class Main():
                 MessageBoxModern(self.root, title='错误', icon='error', text_blod='密码错误', text='密码错误,请重试或咨询课代表.')
 
     def verify_admin_password(self):
+        if getattr(self, '_cli_mode', False):
+            return True
         """验证管理员密码.密码为空则直接通过."""
         expected = self.settings.get('password', {}).get('admin', '') or ''
         if expected == '':
@@ -1182,15 +1108,12 @@ class Main():
             if col in ('#0', ''):
                 if is_subject_row:
                     # 科目行 → 展开/收起，不打开编辑
-                    try:
-                        opened = bool(self.treeview_homework.item(row, 'open'))
-                        self.treeview_homework.item(row, open=not opened)
-                        self.treeview_homework.selection_set(row)
-                        self.treeview_homework.focus(row)
-                        self.root.after_idle(lambda r=row: self._update_subject_state(r))
-                        self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
-                    except Exception:
-                        pass
+                    opened = bool(self.treeview_homework.item(row, 'open'))
+                    self.treeview_homework.item(row, open=not opened)
+                    self.treeview_homework.selection_set(row)
+                    self.treeview_homework.focus(row)
+                    self.root.after_idle(lambda r=row: self._update_subject_state(r))
+                    self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
                     return 'break'
                 else:
                     # 科目列上的作业子行 → 打开该科目编辑
@@ -1256,18 +1179,11 @@ class Main():
             # 关闭前若正在编辑则先提交
             if edit_entry[0] is not None:
                 commit_edit()
-            try:
-                window_homework.destroy()
-            except Exception:
-                pass
-            # 关闭后强制展开主界面对应科目,并刷新行色
-            try:
-                if self.treeview_homework.exists(subject):
-                    self.treeview_homework.item(subject, open=True)
-                    self._update_subject_state(subject)
-                    self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
-            except Exception:
-                pass
+            window_homework.destroy()
+            if self.treeview_homework.exists(subject):
+                self.treeview_homework.item(subject, open=True)
+                self._update_subject_state(subject)
+                self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
             self.root.focus()
 
         def on_window_escape(event=None):
@@ -1313,13 +1229,9 @@ class Main():
 
         def safe_set_row_color():
             """防止窗口已销毁后 after_idle 访问已删除的 tree 报错"""
-            try:
-                t = tree_ref[0]
-                if t is not None and t.winfo_exists():
-                    SetExpandedTreeviewRowColor(t)
-            except Exception:
-                pass
-
+            t = tree_ref[0]
+            if t is not None and t.winfo_exists():
+                SetExpandedTreeviewRowColor(t)
         def refresh_tree():
             for child in tree.get_children():
                 tree.delete(child)
@@ -1340,9 +1252,8 @@ class Main():
             while w is not None:
                 if w == target:
                     return True
-                try:
-                    w = w.master
-                except Exception:
+                w = getattr(w, 'master', None)
+                if w is None:
                     break
             return False
 
@@ -1377,25 +1288,15 @@ class Main():
             if edit_entry[0] is None:
                 return
             idx = editing_index[0]
-            try:
-                edit_entry[0].destroy()
-            except Exception:
-                pass
+            edit_entry[0].destroy()
             edit_entry[0] = None
             editing_index[0] = None
             editing_item[0] = None
-            try:
-                button_ok.bind_default_active()
-            except Exception:
-                pass
-            # 新建行在 start 前已 append('')，取消时应删掉该空行；已有内容的行 working_list 未改，刷新即可
+            button_ok.bind_default_active()
             if idx is not None and 0 <= idx < len(working_list):
                 if working_list[idx].replace('\t', '').replace(' ', '') == '':
                     del working_list[idx]
-                    try:
-                        sync_to_data()
-                    except Exception:
-                        pass
+                    sync_to_data()
             refresh_tree()
 
         def commit_edit():
@@ -1406,19 +1307,13 @@ class Main():
             except Exception:
                 new_text = ''
             idx = editing_index[0]
-            try:
-                edit_entry[0].destroy()
-            except Exception:
-                pass
+            edit_entry[0].destroy()
             edit_entry[0] = None
             editing_index[0] = None
             editing_item[0] = None
 
             if idx is None or idx < 0 or idx >= len(working_list):
-                try:
-                    button_ok.bind_default_active()
-                except Exception:
-                    pass
+                button_ok.bind_default_active()
                 return
             if new_text.replace('\t', '').replace(' ', '') == '':
                 # 空内容视为删除
@@ -1426,11 +1321,7 @@ class Main():
             else:
                 working_list[idx] = new_text
 
-            try:
-                button_ok.bind_default_active()
-            except Exception:
-                pass
-            
+            button_ok.bind_default_active()
             sync_to_data()
             refresh_tree()
 
@@ -1447,10 +1338,7 @@ class Main():
             idx = tree.index(item)
             # 已经在编辑同一行则不重复创建
             if edit_entry[0] is not None and editing_item[0] == item:
-                try:
-                    edit_entry[0].Entry.focus_set()
-                except Exception:
-                    pass
+                edit_entry[0].Entry.focus_set()
                 return
             if edit_entry[0] is not None:
                 commit_edit()
@@ -1483,11 +1371,8 @@ class Main():
             abs_y = tree.winfo_y() + by
 
             entry = DCombobutton(window_homework, font=YAHEI_TEXT_FONT, state='normal')
-            try:
-                if subject in self.homework_template and 'template' in self.homework_template[subject]:
-                    entry['values'] = self.homework_template[subject]['template']
-            except Exception:
-                pass
+            if subject in self.homework_template and 'template' in self.homework_template[subject]:
+                entry['values'] = self.homework_template[subject]['template']
             entry.Entry.insert(0, content)
             entry.place(x=abs_x, y=abs_y, width=max(bw, 80), height=max(bh, 36))
             entry.Entry.focus_set()
@@ -1553,17 +1438,11 @@ class Main():
             if edit_entry[0] is not None and editing_index[0] is not None:
                 idx = editing_index[0]
                 # 丢弃正在编辑的内容,直接删行
-                try:
-                    edit_entry[0].destroy()
-                except Exception:
-                    pass
+                edit_entry[0].destroy()
                 edit_entry[0] = None
                 editing_index[0] = None
                 editing_item[0] = None
-                try:
-                    button_ok.bind_default_active()
-                except Exception:
-                    pass
+                button_ok.bind_default_active()
             else:
                 selected = tree.selection()
                 if not selected:
@@ -1777,12 +1656,9 @@ class Main():
 
         def run_open_touch_keyboard():
             OpenTouchKeyboard()
-            try:
-                if edit_entry[0] is None:
-                    return
-                edit_entry[0].Entry.focus_set()
-            except:
-                pass
+            if edit_entry[0] is None:
+                return
+            edit_entry[0].Entry.focus_set()
         button_number_open_touch_keyboard= DButton(frame_number, text='\uF741', font=self.font_icon, command=run_open_touch_keyboard, takefocus=0)
         button_number_open_touch_keyboard.place(x=20, y=370, width=50, height=50)
 
@@ -1895,38 +1771,29 @@ class Main():
             if has_o:
                 tail += 'O'
             new_s = body + tail
-            try:
-                target.delete(0, tk.END)
-                target.insert(0, new_s)
-                target.Entry.focus_set()
-                target.Entry.icursor(tk.END)
-            except Exception:
-                pass
-
-        try:
-            if subject in self.homework_template:
-                for text in self.homework_template[subject].get('measureword', []):
-                    button = DButton(
-                        text_measureword,
-                        text=text,
-                        command=lambda t=text: insert_char(t),
-                        font=YAHEI_TEXT_FONT,
-                        padx=15,
-                        pady=15,)
-                    text_measureword.window_create('insert', window=button)
-                for text in self.homework_template[subject].get('otherword', []):
-                    button = DButton(
-                        text_otherword,
-                        text=text,
-                        command=lambda t=text: insert_char(t),
-                        font=YAHEI_TEXT_FONT,
-                        padx=15,
-                        pady=15,)
-                    text_otherword.window_create('insert', window=button)
-        except Exception:
-            pass
-
-        # 程序级样式标记：R红 G深绿 Y深黄 B天蓝 O加粗 F反色（插在配置候选词之后）
+            target.delete(0, tk.END)
+            target.insert(0, new_s)
+            target.Entry.focus_set()
+            target.Entry.icursor(tk.END)
+        if subject in self.homework_template:
+            for text in self.homework_template[subject].get('measureword', []):
+                button = DButton(
+                    text_measureword,
+                    text=text,
+                    command=lambda t=text: insert_char(t),
+                    font=YAHEI_TEXT_FONT,
+                    padx=15,
+                    pady=15,)
+                text_measureword.window_create('insert', window=button)
+            for text in self.homework_template[subject].get('otherword', []):
+                button = DButton(
+                    text_otherword,
+                    text=text,
+                    command=lambda t=text: insert_char(t),
+                    font=YAHEI_TEXT_FONT,
+                    padx=15,
+                    pady=15,)
+                text_otherword.window_create('insert', window=button)
         style_btns = [
             ('R', REDTEXTFG),
             ('G', GREENLIGHT),
@@ -2080,20 +1947,12 @@ class Main():
     def password_control(self,):
         # 构建可选账户列表：admin、default、模板中的科目、settings中已有科目
         accounts = ['admin', 'default']
-        try:
-            for subject in self.homework_template.keys():
-                if subject not in accounts:
-                    accounts.append(subject)
-        except Exception:
-            pass
-        try:
-            for key in self.settings.get('password', {}).keys():
-                if key not in accounts:
-                    accounts.append(key)
-        except Exception:
-            pass
-
-        # 弹出 PasswordBox：选择账户并输入当前密码
+        for subject in self.homework_template.keys():
+            if subject not in accounts:
+                accounts.append(subject)
+        for key in self.settings.get('password', {}).keys():
+            if key not in accounts:
+                accounts.append(key)
         result = PasswordBox(
             title='账号密码控制',
             text='请选择要修改密码的账户,并输入当前密码进行验证.',
@@ -2193,17 +2052,12 @@ class Main():
         try:
             date = datetime.datetime.now().strftime('%Y-%m-%d')
             # 同步写入当日考勤历史（勾选自习考勤时）
-            try:
-                att_on = False
-                try:
-                    att_on = bool(self.var_attendance_enabled.get())
-                except Exception:
-                    att_on = bool(getattr(self, 'attendance_enabled', False))
-                if att_on:
-                    self._save_attendance_record(date=date)
-            except Exception:
-                pass
-
+            if hasattr(self, 'var_attendance_enabled'):
+                att_on = bool(self.var_attendance_enabled.get())
+            else:
+                att_on = bool(getattr(self, 'attendance_enabled', False))
+            if att_on:
+                self._save_attendance_record(date=date)
             history = {}
             try:
                 with open('homeworktool_previous_homework.json', 'r', encoding='utf-8') as f:
@@ -2225,21 +2079,15 @@ class Main():
                 return
 
             # 成功：按钮文字改为「成功」,0.5 秒后恢复
-            try:
-                btn = self.button_save_homework_file
-                old_text = btn['text']
-                btn['text'] = '成功'
-                def _restore():
-                    try:
-                        if btn.winfo_exists():
-                            btn['text'] = old_text
-                            btn._update_border_size()
-                    except Exception:
-                        pass
-                self.root.after(500, _restore)
-            except Exception:
-                pass
-        except:
+            btn = self.button_save_homework_file
+            old_text = btn['text']
+            btn['text'] = '成功'
+            def _restore():
+                if btn.winfo_exists():
+                    btn['text'] = old_text
+                    btn._update_border_size()
+            self.root.after(500, _restore)
+        except Exception:
             if not silent:
                 MessageBoxModern(parent=self.root,title='错误',text=traceback.format_exc(),text_blod='写入历史记录文件失败',icon='error')
 
@@ -2314,15 +2162,8 @@ class Main():
             return
 
         def close_win(event=None):
-            try:
-                win.destroy()
-            except Exception:
-                pass
-            try:
-                self.root.focus()
-            except Exception:
-                pass
-
+            win.destroy()
+            self.root.focus()
         win = tk.Toplevel(self.root)
         win.title('载入历史记录')
         SetDarkTitleBar(win)
@@ -2403,10 +2244,7 @@ class Main():
             try:
                 src = Image.open(img_path)
                 # 转为 RGB 副本，避免文件句柄与模式问题
-                try:
-                    src = src.convert('RGB')
-                except Exception:
-                    pass
+                src = src.convert('RGB')
                 preview_state['date'] = date_str
                 preview_state['src_img'] = src
                 _render_preview_image(src)
@@ -2420,10 +2258,7 @@ class Main():
                 return
             aid = preview_state.get('after_id')
             if aid is not None:
-                try:
-                    win.after_cancel(aid)
-                except Exception:
-                    pass
+                win.after_cancel(aid)
             def _do():
                 preview_state['after_id'] = None
                 if preview_state.get('src_img') is not None:
@@ -2480,14 +2315,8 @@ class Main():
         btn_cancel = DButton(win, text='取消', command=close_win)
         btn_cancel.place(x=800, y=490, width=80, height=30)
 
-        try:
-            ConvertPlaceToRelative(win)
-        except Exception:
-            pass
-        try:
-            win.iconbitmap(f'{libresource}icon.ico')
-        except Exception:
-            pass
+        ConvertPlaceToRelative(win)
+        win.iconbitmap(f'{libresource}icon.ico')
         win.wait_window()
 
 
@@ -2498,15 +2327,8 @@ class Main():
         MERGE_OPTIONS = ['合并', '直接覆盖']
 
         def close_win(event=None):
-            try:
-                win.destroy()
-            except Exception:
-                pass
-            try:
-                self.root.focus()
-            except Exception:
-                pass
-
+            win.destroy()
+            self.root.focus()
         win = tk.Toplevel(self.root)
         win.title(f'导入历史记录 日期「{target_date}」')
         SetDarkTitleBar(win)
@@ -2527,13 +2349,10 @@ class Main():
         # 全局合并策略
         tk.Label(win, bg=WINDOWBG, fg=TEXTFG, text='合并方式:', anchor='e').place(x=480, y=15, width=80, height=30)
         combo_global = DCombobutton(win, values=MERGE_OPTIONS, state='readonly')
-        try:
-            combo_global['state'] = 'normal'
-            combo_global.delete(0, tk.END)
-            combo_global.insert(0, MERGE_OPTIONS[0])
-            combo_global['state'] = 'readonly'
-        except Exception:
-            pass
+        combo_global['state'] = 'normal'
+        combo_global.delete(0, tk.END)
+        combo_global.insert(0, MERGE_OPTIONS[0])
+        combo_global['state'] = 'readonly'
         combo_global.place(x=560, y=15, width=120, height=30)
 
         text_box = tk.Text(
@@ -2560,23 +2379,15 @@ class Main():
                 return
             val = bool(info['subj_var'].get())
             for _txt, ivar in info['items']:
-                try:
-                    ivar.set(val)
-                except Exception:
-                    pass
-
+                ivar.set(val)
         def _on_item_toggle(subject):
             """若全部子项勾选则勾选科目;若有未勾选则取消科目勾选."""
             info = row_data.get(subject)
             if not info or not info['items']:
                 return
             all_on = all(bool(iv.get()) for _t, iv in info['items'])
-            try:
-                # 避免递归触发科目 command 再改子项：仅同步科目框显示
-                info['subj_var'].set(all_on)
-            except Exception:
-                pass
-
+            # 避免递归触发科目 command 再改子项：仅同步科目框显示
+            info['subj_var'].set(all_on)
         for subject in subjects:
             hist_items = list(target_homework.get(subject) or [])
             if not hist_items:
@@ -2664,17 +2475,10 @@ class Main():
                 imported_any = True
 
             for subject in self.homework_data.keys():
-                try:
-                    if self.homework_data[subject]:
-                        self.treeview_homework.item(subject, open=True)
-                    self._update_subject_state(subject)
-                except Exception:
-                    pass
-            try:
-                self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
-            except Exception:
-                pass
-
+                if self.homework_data[subject]:
+                    self.treeview_homework.item(subject, open=True)
+                self._update_subject_state(subject)
+            self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
             close_win()
             if imported_any:
                 MessageBoxModern(
@@ -2694,14 +2498,8 @@ class Main():
         btn_cancel = DButton(win, text='取消', command=close_win)
         btn_cancel.place(x=620, y=510, width=80, height=30)
 
-        try:
-            ConvertPlaceToRelative(win)
-        except Exception:
-            pass
-        try:
-            win.iconbitmap(f'{libresource}icon.ico')
-        except Exception:
-            pass
+        ConvertPlaceToRelative(win)
+        win.iconbitmap(f'{libresource}icon.ico')
         win.wait_window()
 
 
@@ -2731,18 +2529,10 @@ class Main():
                     self._update_subject_state(subject)
             #MessageBoxModern(parent=self.root, title='提示', text=f'已自动载入今日({date})的作业记录.', text_blod='自动载入历史记录成功', icon='info')
             # 同步载入今日考勤实到人数到主界面
-            try:
-                self._load_attendance_into_ui(date)
-            except Exception:
-                pass
-        except:
-            pass  # 静默处理异常,确保即使自动加载失败也不影响程序正常启动
-        # 无论作业是否载入成功,都尝试把今日考勤写入主界面
-        try:
-            self._load_attendance_into_ui()
-        except Exception:
-            pass
-
+            self._load_attendance_into_ui(date)
+        except (OSError, json.JSONDecodeError, KeyError, tk.TclError, TypeError, ValueError):
+            pass  # 自动加载失败不阻断启动
+        self._load_attendance_into_ui()
     def apply_homework_template(self,):
         # 默认九科（保证绝对顺序）
         default_subjects = ['语文', '数学', '英语', '物理', '化学', '生物', '政治', '历史', '地理']
@@ -2886,15 +2676,8 @@ class Main():
         removed_subjects = set()
 
         def close_window_settings(event=None):
-            try:
-                window_settings.destroy()
-            except Exception:
-                pass
-            try:
-                self.root.focus()
-            except Exception:
-                pass
-
+            window_settings.destroy()
+            self.root.focus()
         window_settings = tk.Toplevel(self.root)
         self.window_settings=window_settings
         window_settings.title("全局设置")
@@ -2940,10 +2723,7 @@ class Main():
                 0, str(int(getattr(self, 'expected_attendance', 50)))
             )
         except Exception:
-            try:
-                spinbox_expected_attendance.insert(0, '50')
-            except Exception:
-                pass
+            spinbox_expected_attendance.insert(0, '50')
         spinbox_expected_attendance.place(x=110, y=100, width=120, height=30)
 
         tk.Label(window_settings, bg=TEXTBG).place(x=20, y=150, width=880, height=2)
@@ -3049,14 +2829,11 @@ class Main():
             for s in ordered_subjects():
                 listbox_subject.insert(tk.END, s)
             if select_name and select_name in work_template:
-                try:
-                    idx = ordered_subjects().index(select_name)
-                    listbox_subject.selection_clear(0, tk.END)
-                    listbox_subject.selection_set(idx)
-                    listbox_subject.activate(idx)
-                    listbox_subject.see(idx)
-                except ValueError:
-                    pass
+                idx = ordered_subjects().index(select_name)
+                listbox_subject.selection_clear(0, tk.END)
+                listbox_subject.selection_set(idx)
+                listbox_subject.activate(idx)
+                listbox_subject.see(idx)
             elif listbox_subject.size() > 0:
                 listbox_subject.selection_set(0)
                 listbox_subject.activate(0)
@@ -3253,38 +3030,30 @@ class Main():
             self.settings['auto_set_desktop_background'] = self.auto_set_desktop_background
             try:
                 exp = int(float(spinbox_expected_attendance.get()))
-            except Exception:
+            except (TypeError, ValueError):
                 exp = int(getattr(self, 'expected_attendance', 50) or 50)
             if exp < 0:
                 exp = 0
             self.expected_attendance = exp
             self.settings['expected_attendance'] = exp
             # 同步主界面实到 Spinbox 上限为新的应到人数（最小仍为 0）
-            try:
-                if hasattr(self, 'spinbox_attendance') and self.spinbox_attendance.winfo_exists():
-                    self.spinbox_attendance.from_ = 0
-                    self.spinbox_attendance.to = max(0, int(exp))
+            if hasattr(self, 'spinbox_attendance') and self.spinbox_attendance.winfo_exists():
+                self.spinbox_attendance.from_ = 0
+                self.spinbox_attendance.to = max(0, int(exp))
+                try:
+                    cur = int(float(self.spinbox_attendance.get() or 0))
+                except Exception:
+                    cur = 0
+                if cur > exp:
+                    was_on = False
                     try:
-                        cur = int(float(self.spinbox_attendance.get() or 0))
+                        was_on = bool(self.var_attendance_enabled.get())
                     except Exception:
-                        cur = 0
-                    if cur > exp:
-                        was_on = False
-                        try:
-                            was_on = bool(self.var_attendance_enabled.get())
-                        except Exception:
-                            was_on = bool(getattr(self, 'attendance_enabled', False))
-                        try:
-                            self.spinbox_attendance.config(state='normal')
-                            self.spinbox_attendance.delete(0, tk.END)
-                            self.spinbox_attendance.insert(0, str(int(exp)))
-                        except Exception:
-                            pass
-                        self._set_attendance_spinbox_state(was_on)
-            except Exception:
-                pass
-
-            # 2) 应用科目删除到内存树与 homework_data
+                        was_on = bool(getattr(self, 'attendance_enabled', False))
+                   
+                    self.spinbox_attendance.delete(0, tk.END)
+                    self.spinbox_attendance.insert(0, str(int(exp)))
+                    self._set_attendance_spinbox_state(was_on)
             for subj in list(removed_subjects):
                 if subj in self.homework_data:
                     try:
@@ -3292,20 +3061,10 @@ class Main():
                     except Exception:
                         self.homework_data.pop(subj, None)
                 if self.treeview_homework.exists(subj):
-                    try:
-                        self.treeview_homework.delete(subj)
-                    except Exception:
-                        pass
-                # settings.password 中对应条目可保留或删除：删除自定义科时一并去掉密码键
-                try:
-                    if 'password' in self.settings and subj in self.settings['password']:
-                        if subj not in DEFAULT_SUBJECTS:
-                            del self.settings['password'][subj]
-                except Exception:
-                    pass
-
-            # 3) 应用重命名（不改历史记录文件）
-            # rename_map: old -> new;可能有多条
+                    self.treeview_homework.delete(subj)
+                if 'password' in self.settings and subj in self.settings['password']:
+                    if subj not in DEFAULT_SUBJECTS:
+                        del self.settings['password'][subj]
             for old_name, new_name in list(rename_map.items()):
                 if old_name == new_name:
                     continue
@@ -3338,14 +3097,9 @@ class Main():
                         self.homework_data[new_name] = []
                     self._update_subject_ui(new_name)
                 # settings.password 键同步
-                try:
-                    pwd = self.settings.get('password', {})
-                    if old_name in pwd:
-                        pwd[new_name] = pwd.pop(old_name)
-                except Exception:
-                    pass
-
-            # 4) 新增科目：确保树与数据存在
+                pwd = self.settings.get('password', {})
+                if old_name in pwd:
+                    pwd[new_name] = pwd.pop(old_name)
             for name in work_template.keys():
                 if name not in self.homework_data:
                     self.homework_data[name] = []
@@ -3374,11 +3128,7 @@ class Main():
                 )
                 return
 
-            try:
-                self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
-            except Exception:
-                pass
-
+            self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
             close_window_settings()
 
         button_ok.config(command=save_and_close)
@@ -3411,15 +3161,8 @@ class Main():
         }
 
         def close_adv(event=None):
-            try:
-                win.destroy()
-            except Exception:
-                pass
-            try:
-                parent.focus()
-            except Exception:
-                pass
-
+            win.destroy()
+            parent.focus()
         win = tk.Toplevel(parent)
         win.title('高级设置')
         SetDarkTitleBar(win)
@@ -3437,10 +3180,7 @@ class Main():
         ).place(x=20, y=10, width=860, height=30)
 
         style = ttk.Style()
-        try:
-            style.theme_use('alt')
-        except Exception:
-            pass
+        style.theme_use('alt')
         style.configure(
             'Adv.Treeview', rowheight=28,
             fieldbackground=WINDOWBG, background=WINDOWBG, foreground=TEXTFG,
@@ -3497,11 +3237,7 @@ class Main():
                 tree.delete(iid)
             for desc, key in ADVANCED_SETTING_ROWS:
                 tree.insert('', 'end', iid=key, values=(desc, key, value_to_display(work.get(key, ''))))
-            try:
-                win.after_idle(lambda: SetExpandedTreeviewRowColor(tree))
-            except Exception:
-                pass
-
+            win.after_idle(lambda: SetExpandedTreeviewRowColor(tree))
         refresh_rows()
 
         def parse_value(key, text_val):
@@ -3534,9 +3270,8 @@ class Main():
             while w is not None:
                 if w is root_widget:
                     return True
-                try:
-                    w = w.master
-                except Exception:
+                w = getattr(w, 'master', None)
+                if w is None:
                     break
             return False
 
@@ -3545,11 +3280,7 @@ class Main():
             editor_ref[0] = None
             if ed is None:
                 return
-            try:
-                ed.destroy()
-            except Exception:
-                pass
-
+            ed.destroy()
         def on_double_click(event):
             # 已有编辑器时先不重复创建
             if editor_ref[0] is not None:
@@ -3591,11 +3322,10 @@ class Main():
                 elif 'MARGIN' in key or '_Y' in key or '_X' in key:
                     lo, hi = 0, 5000
                 editor = DSpinbox(tree, int_only=True, from_=lo, to=hi, increment=1)
+                editor.delete(0, tk.END)
                 try:
-                    editor.delete(0, tk.END)
                     editor.insert(0, str(int(float(current_value))) if current_value not in ('',) else '0')
-                except Exception:
-                    editor.delete(0, tk.END)
+                except (TypeError, ValueError):
                     editor.insert(0, current_value or '0')
                 get_text = lambda: editor.get()
                 focus_target = editor
@@ -3611,10 +3341,7 @@ class Main():
                     editor.insert(0, cur)
                     editor['state']='readonly'
                 except Exception:
-                    try:
-                        editor.insert(0, 'system')
-                    except Exception:
-                        pass
+                    editor.insert(0, 'system')
                 get_text = lambda: editor.get()
                 focus_target = editor
             else:
@@ -3633,10 +3360,7 @@ class Main():
                 if ed is None:
                     return
                 # 若焦点仍在编辑器内部（含 DSpinbox 的 +/- 按钮），不结束编辑
-                try:
-                    fw = win.focus_get()
-                except Exception:
-                    fw = None
+                fw = win.focus_get()
                 if fw is not None and is_widget_or_descendant(fw, ed):
                     return
                 # 滚动等外部操作会强制结束：此时用 force 参数
@@ -3651,19 +3375,10 @@ class Main():
                 if ed is None:
                     return
                 editor_ref[0] = None
-                try:
-                    _unbind_scroll()
-                except Exception:
-                    pass
-                try:
-                    new_value = get_text()
-                except Exception:
-                    new_value = ''
+                _unbind_scroll()
+                new_value = get_text()
                 key_local = getattr(ed, 'row_id', None)
-                try:
-                    ed.destroy()
-                except Exception:
-                    pass
+                ed.destroy()
                 if not key_local:
                     tree.focus_set()
                     return
@@ -3691,10 +3406,7 @@ class Main():
                 tree.focus_set()
 
             def cancel_edit(event=None):
-                try:
-                    _unbind_scroll()
-                except Exception:
-                    pass
+                _unbind_scroll()
                 destroy_editor()
                 tree.focus_set()
 
@@ -3713,10 +3425,7 @@ class Main():
                 editor.Entry.bind('<Escape>', cancel_edit)
                 editor.Entry.bind('<FocusOut>', apply_edit)
                 editor.bind('<FocusOut>', apply_edit)
-                try:
-                    editor.DButton_show_list.bind('<FocusOut>', apply_edit)
-                except Exception:
-                    pass
+                editor.DButton_show_list.bind('<FocusOut>', apply_edit)
             else:
                 editor.bind('<Return>', lambda e: apply_edit_force())
                 editor.bind('<Escape>', cancel_edit)
@@ -3732,23 +3441,13 @@ class Main():
 
             def _unbind_scroll():
                 for widget, seq, fid in getattr(editor, '_scroll_bind_ids', []) or []:
-                    try:
-                        widget.unbind(seq, fid)
-                    except Exception:
-                        pass
-                try:
-                    editor._scroll_bind_ids = []
-                except Exception:
-                    pass
-
+                    widget.unbind(seq, fid)
+                editor._scroll_bind_ids = []
             focus_target.focus_set()
-            try:
-                if use_spin or use_combo:
-                    editor.Entry.select_range(0, tk.END)
-                else:
-                    editor.select_range(0, tk.END)
-            except Exception:
-                pass
+            if use_spin or use_combo:
+                editor.Entry.select_range(0, tk.END)
+            else:
+                editor.select_range(0, tk.END)
             return 'break'
 
         tree.bind('<Double-Button-1>', on_double_click)
@@ -3759,20 +3458,17 @@ class Main():
             global YAHEI_TEXT_FONT
             # 若仍在编辑，先提交
             if editor_ref[0] is not None:
-                try:
-                    # 强制提交
-                    ed = editor_ref[0]
-                    if isinstance(ed, DSpinbox) or isinstance(ed, DCombobutton):
-                        txt = ed.Entry.get()
-                    else:
-                        txt = ed.get()
-                    key = ed.row_id
-                    parsed = parse_value(key, txt)
-                    if key == 'highlight_box' and isinstance(parsed, (list, tuple)) and len(parsed) >= 4:
-                        parsed = [int(parsed[0]), int(parsed[1]), int(parsed[2]), int(parsed[3])]
-                    work[key] = parsed
-                except Exception:
-                    pass
+                # 强制提交
+                ed = editor_ref[0]
+                if isinstance(ed, DSpinbox) or isinstance(ed, DCombobutton):
+                    txt = ed.Entry.get()
+                else:
+                    txt = ed.get()
+                key = ed.row_id
+                parsed = parse_value(key, txt)
+                if key == 'highlight_box' and isinstance(parsed, (list, tuple)) and len(parsed) >= 4:
+                    parsed = [int(parsed[0]), int(parsed[1]), int(parsed[2]), int(parsed[3])]
+                work[key] = parsed
                 destroy_editor()
 
             for key, val in work.items():
@@ -3811,14 +3507,8 @@ class Main():
         button_cancel_advanced.place(x=800, y=515, width=80, height=30)
         button_cancel_advanced.unbind_default_active()
 
-        try:
-            ConvertPlaceToRelative(win)
-        except Exception:
-            pass
-        try:
-            win.iconbitmap(f'{libresource}icon.ico')
-        except Exception:
-            pass
+        ConvertPlaceToRelative(win)
+        win.iconbitmap(f'{libresource}icon.ico')
         win.wait_window()
 
     def open_background_image_settings_window(self, parent=None):
@@ -3826,15 +3516,8 @@ class Main():
         parent = parent or self.root
 
         def close_win(event=None):
-            try:
-                win.destroy()
-            except Exception:
-                pass
-            try:
-                parent.focus()
-            except Exception:
-                pass
-
+            win.destroy()
+            parent.focus()
         win = tk.Toplevel(parent)
         win.title('背景图像设置')
         SetDarkTitleBar(win)
@@ -3867,23 +3550,16 @@ class Main():
         def update_swatch(event=None):
             c = entry_background_color.get().strip()
             rgb = self._parse_bg_color(c)
-            try:
-                preview_swatch.config(bg='#{:02x}{:02x}{:02x}'.format(*rgb))
-            except Exception:
-                pass
-
+            preview_swatch.config(bg='#{:02x}{:02x}{:02x}'.format(*rgb))
         entry_background_color.bind('<KeyRelease>', update_swatch, add='+')
         entry_background_color.bind('<FocusOut>', update_swatch, add='+')
 
         def pick_color():
-            try:
-                rgb_tuple, hx = colorchooser.askcolor(
-                    color=preview_swatch.cget('bg'),
-                    parent=win,
-                    title='选择背景底色',
-                )
-            except Exception:
-                return
+            rgb_tuple, hx = colorchooser.askcolor(
+                color=preview_swatch.cget('bg'),
+                parent=win,
+                title='选择背景底色',
+            )
             if hx:
                 entry_background_color.delete(0, 'end')
                 entry_background_color.insert(0, hx.upper())
@@ -3935,42 +3611,14 @@ class Main():
 
         def refresh_widget_state(event=None, *args):
             if var_background_mode.get() == '图片':
-                try:
-                    entry_background_file.config(state='normal')
-                except Exception:
-                    pass
-                try:
-                    entry_background_stretch_mode['state'] = 'readonly'
-                except Exception:
-                    try:
-                        entry_background_stretch_mode.config(state='readonly')
-                    except Exception:
-                        pass
-                try:
-                    button_open_browse_file_dialog.config(state='normal')
-                except Exception:
-                    pass
+                entry_background_file.config(state='normal')
+                entry_background_stretch_mode['state'] = 'readonly'
+                button_open_browse_file_dialog.config(state='normal')
             else:
-                try:
-                    entry_background_file.config(state='disabled')
-                except Exception:
-                    pass
-                try:
-                    entry_background_stretch_mode['state'] = 'disabled'
-                except Exception:
-                    try:
-                        entry_background_stretch_mode.config(state='disabled')
-                    except Exception:
-                        pass
-                try:
-                    button_open_browse_file_dialog.config(state='disabled')
-                except Exception:
-                    pass
-
-        try:
-            var_background_mode.trace_add('write', refresh_widget_state)
-        except Exception:
-            pass
+                entry_background_file.config(state='disabled')
+                entry_background_stretch_mode['state'] = 'disabled'
+                button_open_browse_file_dialog.config(state='disabled')
+        var_background_mode.trace_add('write', refresh_widget_state)
         refresh_widget_state()
         update_swatch()
 
@@ -4017,25 +3665,12 @@ class Main():
 
         button_ok = DButton(win, text='确定', default='active', command=save_and_close)
         button_ok.place(x=520, y=270, width=80, height=30)
-        try:
-            button_ok.unbind_default_active()
-        except Exception:
-            pass
+        button_ok.unbind_default_active()
         button_cancel = DButton(win, text='取消', command=close_win)
         button_cancel.place(x=620, y=270, width=80, height=30)
-        try:
-            button_cancel.unbind_default_active()
-        except Exception:
-            pass
-
-        try:
-            ConvertPlaceToRelative(win)
-        except Exception:
-            pass
-        try:
-            win.iconbitmap(f'{libresource}icon.ico')
-        except Exception:
-            pass
+        button_cancel.unbind_default_active()
+        ConvertPlaceToRelative(win)
+        win.iconbitmap(f'{libresource}icon.ico')
         win.wait_window()
 
 
@@ -4130,5 +3765,272 @@ class Main():
 
 
 
-if __name__=='__main__':
+# ========================= 命令行接口 =========================
+CLI_HELP = """作业布置与展示工具 命令行用法
+
+  python homeworktool.py [选项]
+
+选项:
+  --assign <科目> <作业内容>     在指定科目下新建一条作业；科目不存在则仅报错
+  --notice <内容>                在「班务」科目下新建一条内容（无则自动创建科目）
+  --delete <科目> <作业内容>     删除该科目中与内容完全匹配的作业（无匹配则报错）
+  --deleteid <科目> <序号>       按 1-based 序号删除该科目作业（越界则报错）
+  --attendance <人数>            设置今日实到人数并写入考勤历史
+  --render                       生成作业图片（同「生成图片」，命令行跳过密码）
+  --help, -h                     显示本帮助
+
+说明:
+  · 可一次传入多个选项，按从左到右顺序执行
+  · 每个会改数据的操作结束后自动保存历史记录
+  · 无任何选项时启动图形界面
+"""
+
+
+def _cli_today():
+    return datetime.datetime.now().strftime('%Y-%m-%d')
+
+
+def _cli_load_json(path, default):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, type(default)) else default
+    except Exception:
+        return default
+
+
+def _cli_save_json(path, data):
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _cli_load_today_homework(previous, template):
+    date = _cli_today()
+    today = {}
+    if isinstance(previous, dict) and date in previous and isinstance(previous[date], dict):
+        for k, v in previous[date].items():
+            today[k] = list(v) if isinstance(v, list) else []
+    default_subjects = ['语文', '数学', '英语', '物理', '化学', '生物', '政治', '历史', '地理']
+    for s in default_subjects + list((template or {}).keys()):
+        today.setdefault(s, [])
+    return today
+
+
+def _cli_save_homework(previous, today_homework):
+    date = _cli_today()
+    if not isinstance(previous, dict):
+        previous = {}
+    packed = {s: list(hw) for s, hw in today_homework.items() if hw}
+    previous[date] = packed
+    _cli_save_json('homeworktool_previous_homework.json', previous)
+    return previous
+
+
+def _cli_save_attendance(attendance_history, actual, settings=None):
+    date = _cli_today()
+    try:
+        expected = int((settings or {}).get('expected_attendance', 50))
+    except (TypeError, ValueError):
+        expected = 50
+    try:
+        actual = int(actual)
+    except (TypeError, ValueError):
+        actual = 0
+    if not isinstance(attendance_history, dict):
+        attendance_history = {}
+    attendance_history[date] = {'expected': int(expected), 'actual': int(actual)}
+    _cli_save_json('homeworktool_attendance.json', attendance_history)
+    return attendance_history
+
+
+def _cli_ok(msg):
+    print(f'[成功] {msg}')
+
+
+def _cli_err(msg):
+    print(f'[错误] {msg}')
+
+
+def _cli_subject_exists(subject, today, template):
+    default_subjects = ['语文', '数学', '英语', '物理', '化学', '生物', '政治', '历史', '地理']
+    if subject in today:
+        return True
+    if subject in default_subjects:
+        return True
+    if isinstance(template, dict) and subject in template:
+        return True
+    return False
+
+
+def _cli_do_render(today_homework, settings, template, attendance_history):
+    m = object.__new__(Main)
+    m._cli_mode = True
+    m.settings = settings if isinstance(settings, dict) else {}
+    m.homework_template = template if isinstance(template, dict) else {}
+    m.previous_homework = {}
+    m.attendance_history = attendance_history if isinstance(attendance_history, dict) else {}
+    m.root = None
+    try:
+        m.load_runtime_settings()
+    except Exception as e:
+        _cli_err(f'加载设置失败: {e}')
+        return 1
+    m.homework_data = dict(today_homework)
+    date = _cli_today()
+    rec = m.attendance_history.get(date) if isinstance(m.attendance_history, dict) else None
+    actual = 0
+    if isinstance(rec, dict):
+        try:
+            actual = int(rec.get('actual', 0))
+        except (TypeError, ValueError):
+            actual = 0
+    m._get_actual_attendance_from_ui = lambda: actual
+
+    class _V:
+        def get(self_inner):
+            return bool(getattr(m, 'attendance_enabled', False))
+
+    m.var_attendance_enabled = _V()
+    try:
+        m.export_homework_image()
+        _cli_ok('已生成作业图片（--render）')
+        return 0
+    except Exception:
+        _cli_err(f'生成图片失败:\n{traceback.format_exc()}')
+        return 1
+
+
+def run_cli(argv):
+    if not argv or argv[0] in ('-h', '--help') or all(a in ('-h', '--help') for a in argv):
+        print(CLI_HELP)
+        return 0
+
+    settings = _cli_load_json('homeworktool_settings.json', {})
+    if not isinstance(settings, dict):
+        settings = {}
+    template = _cli_load_json('homeworktool_template.json', {})
+    if not isinstance(template, dict):
+        template = {}
+    previous = _cli_load_json('homeworktool_previous_homework.json', {})
+    if not isinstance(previous, dict):
+        previous = {}
+    attendance_history = _cli_load_json('homeworktool_attendance.json', {})
+    if not isinstance(attendance_history, dict):
+        attendance_history = {}
+
+    today = _cli_load_today_homework(previous, template)
+    exit_code = 0
+    i = 0
+    n = len(argv)
+
+    while i < n:
+        arg = argv[i]
+        if arg in ('-h', '--help'):
+            print(CLI_HELP)
+            i += 1
+            continue
+
+        if arg == '--assign':
+            if i + 2 >= n:
+                _cli_err('--assign 需要参数: <科目> <作业内容>')
+                return 2
+            subject, content = argv[i + 1], argv[i + 2]
+            i += 3
+            if not _cli_subject_exists(subject, today, template):
+                _cli_err(f'科目不存在，未添加: {subject}')
+                exit_code = 1
+                continue
+            today.setdefault(subject, [])
+            today[subject].append(content)
+            previous = _cli_save_homework(previous, today)
+            _cli_ok(f'已添加 [{subject}] {content}')
+            continue
+
+        if arg == '--notice':
+            if i + 1 >= n:
+                _cli_err('--notice 需要参数: <内容>')
+                return 2
+            content = argv[i + 1]
+            i += 2
+            today.setdefault('班务', [])
+            today['班务'].append(content)
+            previous = _cli_save_homework(previous, today)
+            _cli_ok(f'已添加 [班务] {content}')
+            continue
+
+        if arg == '--delete':
+            if i + 2 >= n:
+                _cli_err('--delete 需要参数: <科目> <作业内容>')
+                return 2
+            subject, content = argv[i + 1], argv[i + 2]
+            i += 3
+            if subject not in today or content not in today[subject]:
+                _cli_err(f'删除失败: 未找到匹配作业 [{subject}] {content}')
+                exit_code = 1
+                continue
+            today[subject].remove(content)
+            previous = _cli_save_homework(previous, today)
+            _cli_ok(f'已删除 [{subject}] {content}')
+            continue
+
+        if arg == '--deleteid':
+            if i + 2 >= n:
+                _cli_err('--deleteid 需要参数: <科目> <作业序号>')
+                return 2
+            subject, idx_s = argv[i + 1], argv[i + 2]
+            i += 3
+            try:
+                idx = int(idx_s)
+            except (TypeError, ValueError):
+                _cli_err(f'删除失败: 序号无效 ({idx_s})')
+                exit_code = 1
+                continue
+            if subject not in today or not today[subject]:
+                _cli_err(f'删除失败: 科目无作业或不存在 ({subject})')
+                exit_code = 1
+                continue
+            if idx < 1 or idx > len(today[subject]):
+                _cli_err(f'删除失败: 序号越界 ({idx}, 共 {len(today[subject])} 项)')
+                exit_code = 1
+                continue
+            removed = today[subject].pop(idx - 1)
+            previous = _cli_save_homework(previous, today)
+            _cli_ok(f'已删除 [{subject}] #{idx} {removed}')
+            continue
+
+        if arg == '--attendance':
+            if i + 1 >= n:
+                _cli_err('--attendance 需要参数: <人数>')
+                return 2
+            num_s = argv[i + 1]
+            i += 2
+            try:
+                num = int(float(num_s))
+            except (TypeError, ValueError):
+                _cli_err(f'人数无效: {num_s}')
+                exit_code = 1
+                continue
+            attendance_history = _cli_save_attendance(attendance_history, actual=num, settings=settings)
+            settings['attendance_enabled'] = True
+            _cli_save_json('homeworktool_settings.json', settings)
+            _cli_ok(f'已设置今日实到人数: {num}')
+            continue
+
+        if arg == '--render':
+            i += 1
+            rc = _cli_do_render(today, settings, template, attendance_history)
+            if rc != 0:
+                exit_code = rc
+            continue
+
+        _cli_err(f'未知参数: {arg}')
+        print(CLI_HELP)
+        return 2
+
+    return exit_code
+
+
+if __name__ == '__main__':
+    if len(sys.argv) > 1:
+        raise SystemExit(run_cli(sys.argv[1:]))
     Main()
