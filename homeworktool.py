@@ -1,4 +1,4 @@
-VERSION="1.2.4"
+VERSION="1.2.5"
 #一定要放在第一行
 import  os, sys, win32api, webbrowser, json,  datetime,traceback, ctypes, copy,re
 from tkinter import  filedialog, colorchooser
@@ -40,6 +40,40 @@ DEFAULT_EXPORT_SETTINGS = {
     'background_stretch_mode': '完全拉伸',  # 完全拉伸|横向拉伸|纵向拉伸|不拉伸
 }
 
+DEFAULT_SETTINGS_FILE = {
+    "password": {"admin": "", "default": ""},
+    "highlight_box": [0, 0, 0, 0],
+    "EXPORT_FONT_SUBJECT": 120,
+    "EXPORT_FONT_CONTENT": 100,
+    "EXPORT_FONT_DATE": 110,
+    "EXPORT_FONT_ATTENDANCE": 90,
+    "EXPORT_FONT_SUBJECT_MIN": 40,
+    "EXPORT_FONT_CONTENT_MIN": 32,
+    "EXPORT_FONT_NAME": "宋体",
+    "EXPORT_FONT_FALLBACK_NAMES": [
+        "宋体", "微软雅黑", "Microsoft YaHei", "黑体", "SimHei",
+        "Segoe UI Symbol", "Segoe UI", "Arial Unicode MS", "Arial",
+    ],
+    "EXPORT_LINE_SPACING_CONTENT": 10,
+    "EXPORT_LINE_SPACING_SUBJECT": 15,
+    "EXPORT_SUBJECT_GAP": 32,
+    "EXPORT_MARGIN_X": 300,
+    "EXPORT_MARGIN_BOTTOM": 150,
+    "EXPORT_DATE_Y": 120,
+    "EXPORT_START_Y": 280,
+    "EXPORT_GAP_CENTER": 60,
+    "YAHEI_TEXT_FONT": "TkDefaultFont",
+    "disable_highdpi_scaling": True,
+    "auto_set_desktop_background": True,
+    "expected_attendance": 50,
+    "attendance_enabled": False,
+    "color_mode": "system",
+    "background_mode": "纯色",
+    "background_color": "#FAF9E6",
+    "background_image_path": "",
+    "background_stretch_mode": "完全拉伸",
+}
+
 # 高级设置表：说明, 变量名
 ADVANCED_SETTING_ROWS = [
     ('科目标题字号', 'EXPORT_FONT_SUBJECT'),
@@ -64,7 +98,7 @@ ADVANCED_SETTING_ROWS = [
 ]
 
 # 作业末尾样式标记（保存时保留;导出时解析后去掉）
-HOMEWORK_STYLE_MARKERS = frozenset('RGYBOF')
+HOMEWORK_STYLE_MARKERS = frozenset('RGYBOFH')
 HOMEWORK_STYLE_COLORS = {
     'R': (200, 30, 30),
     'G': (0, 110, 40),
@@ -89,29 +123,32 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 YAHEI_TEXT_FONT = ['微软雅黑', 12]  # 启动时由 settings 覆盖
 
 def parse_homework_style(content):
-    """解析作业末尾的 R/G/Y/B/O/F 标记.
-    返回 (显示文本, 颜色RGB或None, 是否加粗, 是否反色).
+    """解析作业末尾的 R/G/Y/B/O/F/H 标记.
+    返回 (显示文本, 颜色RGB或None, 是否加粗, 是否反色F, 是否背景像素反色H).
     F=反色：黑底；前景默认白，仍受颜色/加粗影响。
+    H=与背景图像对应像素反色显示文字（RGB 按通道取反）。
     """
     if not content:
-        return '', None, False, False
+        return '', None, False, False, False
     i = len(content)
     found = []
     while i > 0 and content[i - 1] in HOMEWORK_STYLE_MARKERS:
         i -= 1
         found.append(content[i])
-    # found 从右到左
     color = None
     bold = False
     inverse = False
+    bg_invert = False
     for ch in found:
         if ch == 'O':
             bold = True
         elif ch == 'F':
             inverse = True
+        elif ch == 'H':
+            bg_invert = True
         elif ch in HOMEWORK_STYLE_COLORS and color is None:
             color = HOMEWORK_STYLE_COLORS[ch]
-    return content[:i], color, bold, inverse
+    return content[:i], color, bold, inverse, bg_invert
 
 
 
@@ -169,60 +206,127 @@ class ObservableHomeworkDict(dict):
 class Main():
     def __init__(self,):
         global YAHEI_TEXT_FONT
-        
-        # 读取配置文件
 
-
-        try:
-            with open('homeworktool_settings.json','r',encoding='utf-8') as f:
-                self.settings = json.load(f)
-        except Exception:
-            if MessageBoxModern(parent=None,title='警告',text=f"{traceback.format_exc()}",text_blod='读取设置文件失败,是否需要重新创建配置文件?',icon='warning',button_mode=2):
-                with open('homeworktool_settings.json','w+',encoding='utf-8') as f:
-                    f.write('{"password":{"admin":"","default":""},"highlight_box":[0,0,0,0],"EXPORT_FONT_SUBJECT":120,"EXPORT_FONT_CONTENT":100,"EXPORT_FONT_DATE":110,"EXPORT_FONT_ATTENDANCE":90,"EXPORT_FONT_SUBJECT_MIN":40,"EXPORT_FONT_CONTENT_MIN":32,"EXPORT_FONT_NAME":"宋体","EXPORT_FONT_FALLBACK_NAMES":["宋体","微软雅黑","MicrosoftYaHei","黑体","SimHei","SegoeUISymbol","SegoeUI","ArialUnicodeMS","Arial"],"EXPORT_LINE_SPACING_CONTENT":10,"EXPORT_LINE_SPACING_SUBJECT":15,"EXPORT_SUBJECT_GAP":32,"EXPORT_MARGIN_X":300,"EXPORT_MARGIN_BOTTOM":150,"EXPORT_DATE_Y":120,"EXPORT_START_Y":280,"EXPORT_GAP_CENTER":60,"YAHEI_TEXT_FONT":"TkDefaultFont","disable_highdpi_scaling":true,"auto_set_desktop_background":true,"expected_attendance":50,"attendance_enabled":false}')
-                    
-            else:
-                sys.exit()
-
-        try:
-            with open('homeworktool_template.json','r',encoding='utf-8') as f:
-                self.homework_template = json.load(f)
-        except Exception:
-            MessageBoxModern(parent=None,title='警告',text=f"{traceback.format_exc()}",text_blod='读取作业模板文件失败,不影响运行.',icon='warning',)      
-            self.homework_template = {}
-     
-
-        try:
-            with open('homeworktool_previous_homework.json','r',encoding='utf-8') as f:
-                self.previous_homework = json.load(f)
-        except Exception:
-            MessageBoxModern(parent=None,title='警告',text=f"{traceback.format_exc()}",text_blod='读取历史记录文件失败,不影响运行.',icon='warning',)
-            self.previous_homework = {}
-
-        try:
-            with open('homeworktool_attendance.json', 'r', encoding='utf-8') as f:
-                self.attendance_history = json.load(f)
-            if not isinstance(self.attendance_history, dict):
-                self.attendance_history = {}
-        except Exception:
-            self.attendance_history = {}
-
+        # 启动时校验四个 JSON：缺失则创建默认内容并警告
+        self._ensure_json_files()
+        self._load_json_files()
         self.load_runtime_settings()
-        
+
         # 初始化作业数据存储字典,绑定自动刷新回调函数
         self.homework_data = ObservableHomeworkDict(self._update_subject_ui)
 
         LoadFont(f'{libresource}/WS_Segoe_MDL2_Assets-Regular.ttf')
 
-
         self.layout_window()
-
-        
-
         self.apply_homework_template()
         self.autoload_homework_histroy()
-        
         self.mainloop()
+
+    def _ensure_json_files(self):
+        """校验设置/模板/历史记录/考勤四个 JSON 是否存在；不存在则写入默认内容并弹窗提示。"""
+        specs = [
+            (
+                'homeworktool_settings.json',
+                '设置文件',
+                DEFAULT_SETTINGS_FILE,
+            ),
+            (
+                'homeworktool_template.json',
+                '作业模板文件',
+                {},
+            ),
+            (
+                'homeworktool_previous_homework.json',
+                '历史记录文件',
+                {},
+            ),
+            (
+                'homeworktool_attendance.json',
+                '考勤历史文件',
+                {},
+            ),
+        ]
+        for path, display_name, default_obj in specs:
+            if os.path.isfile(path):
+                continue
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(default_obj, f, ensure_ascii=False, indent=2)
+            MessageBoxModern(
+                parent=None,
+                title='警告',
+                icon='warning',
+                text_blod=f'{display_name}不存在，已创建默认文件。',
+                text=path,
+            )
+
+    def _load_json_files(self):
+        """读取四个 JSON；格式错误时回退默认值并警告（不影响继续运行）。"""
+        # 设置
+        try:
+            with open('homeworktool_settings.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError('设置文件根节点必须是对象')
+            self.settings = data
+        except Exception:
+            MessageBoxModern(
+                parent=None,
+                title='警告',
+                icon='warning',
+                text_blod='读取设置文件失败，已使用默认设置。',
+                text=traceback.format_exc(),
+            )
+            self.settings = dict(DEFAULT_SETTINGS_FILE)
+            try:
+                with open('homeworktool_settings.json', 'w', encoding='utf-8') as f:
+                    json.dump(self.settings, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
+        # 模板
+        try:
+            with open('homeworktool_template.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            self.homework_template = data if isinstance(data, dict) else {}
+        except Exception:
+            MessageBoxModern(
+                parent=None,
+                title='警告',
+                icon='warning',
+                text_blod='读取作业模板文件失败，不影响运行。',
+                text=traceback.format_exc(),
+            )
+            self.homework_template = {}
+
+        # 历史记录
+        try:
+            with open('homeworktool_previous_homework.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            self.previous_homework = data if isinstance(data, dict) else {}
+        except Exception:
+            MessageBoxModern(
+                parent=None,
+                title='警告',
+                icon='warning',
+                text_blod='读取历史记录文件失败，不影响运行。',
+                text=traceback.format_exc(),
+            )
+            self.previous_homework = {}
+
+        # 考勤
+        try:
+            with open('homeworktool_attendance.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            self.attendance_history = data if isinstance(data, dict) else {}
+        except Exception:
+            MessageBoxModern(
+                parent=None,
+                title='警告',
+                icon='warning',
+                text_blod='读取考勤历史文件失败，不影响运行。',
+                text=traceback.format_exc(),
+            )
+            self.attendance_history = {}
 
 
     def check_update(self,):
@@ -412,11 +516,11 @@ class Main():
                 homework_list = self.homework_data.get(subject, [])
                 if not homework_list:
                     continue
-                blocks.append(('subject', f"{subject}:", None, False, False))
+                blocks.append(('subject', f"{subject}:", None, False, False, False))
                 for index, content in enumerate(homework_list, start=1):
-                    body, style_color, style_bold, style_inverse = parse_homework_style(content)
-                    blocks.append(('content', f"  {index}.{body}", style_color, style_bold, style_inverse))
-                blocks.append(('gap', '', None, False, False))  # 科目之间的额外间距
+                    body, style_color, style_bold, style_inverse, style_bg_invert = parse_homework_style(content)
+                    blocks.append(('content', f"  {index}.{body}", style_color, style_bold, style_inverse, style_bg_invert))
+                blocks.append(('gap', '', None, False, False, False))  # 科目之间的额外间距
 
             # 使用模块级常量
             margin_x = int(self._cfg('EXPORT_MARGIN_X'))
@@ -622,7 +726,7 @@ class Main():
                 current_col = 'left'
                 y = start_y
 
-                def place_line(text, font, extra_after=0, x_offset=0, style_color=None, style_bold=False, style_inverse=False):
+                def place_line(text, font, extra_after=0, x_offset=0, style_color=None, style_bold=False, style_inverse=False, style_bg_invert=False):
                     nonlocal y, current_col
                     h = text_height(draw_obj, text if text else '中', font)
                     if y + h > max_y:
@@ -633,11 +737,11 @@ class Main():
                             return False
                     base_x = left_x if current_col == 'left' else right_x
                     target = left_items if current_col == 'left' else right_items
-                    target.append((base_x + x_offset, y, text, font, style_color, style_bold, style_inverse))
+                    target.append((base_x + x_offset, y, text, font, style_color, style_bold, style_inverse, style_bg_invert))
                     y = y + h + extra_after
                     return True
 
-                for kind, text, style_color, style_bold, style_inverse in blocks:
+                for kind, text, style_color, style_bold, style_inverse, style_bg_invert in blocks:
                     if kind == 'gap':
                         y += subject_gap
                         continue
@@ -649,7 +753,7 @@ class Main():
                         lines = [(line, 0) for line in wrap_plain(draw_obj, text, font, col_width)]
                     for i, (line, x_off) in enumerate(lines):
                         after = spacing_after if i == len(lines) - 1 else max(2, line_spacing_content // 2)
-                        if not place_line(line, font, after, x_off, style_color, style_bold, style_inverse):
+                        if not place_line(line, font, after, x_off, style_color, style_bold, style_inverse, style_bg_invert):
                             return False, None, None
                 return True, left_items, right_items
 
@@ -746,14 +850,45 @@ class Main():
                 y = y2 + gap_len
 
             for item in (final_left or []) + (final_right or []):
-                # 兼容旧 6 元组与新 7 元组
-                if len(item) >= 7:
+                # 兼容 6/7/8 元组
+                style_bg_invert = False
+                if len(item) >= 8:
+                    x, y, text, font, style_color, style_bold, style_inverse, style_bg_invert = item[:8]
+                elif len(item) >= 7:
                     x, y, text, font, style_color, style_bold, style_inverse = item[:7]
                 else:
                     x, y, text, font, style_color, style_bold = item[:6]
                     style_inverse = False
-                if style_inverse:
-                    # 反色：黑底；前景默认白，若有颜色标记则用该颜色
+                if style_bg_invert:
+                    # H：与背景图像对应像素反色（颜色标记忽略；仍可加粗）
+                    if text:
+                        font_chain = font if isinstance(font, (list, tuple)) else [font]
+                        mask = Image.new('L', img.size, 0)
+                        mask_draw = ImageDraw.Draw(mask)
+                        draw_text_mixed(mask_draw, (x, y), text, 255, font_chain, bold=bool(style_bold))
+                        bbox = mask.getbbox()
+                        if bbox:
+                            pix = img.load()
+                            mp = mask.load()
+                            x0, y0, x1, y1 = bbox
+                            for py in range(y0, y1):
+                                for px in range(x0, x1):
+                                    a = mp[px, py]
+                                    if not a:
+                                        continue
+                                    r, g, b = pix[px, py]
+                                    inv = (255 - r, 255 - g, 255 - b)
+                                    if a >= 250:
+                                        pix[px, py] = inv
+                                    else:
+                                        k = a / 255.0
+                                        pix[px, py] = (
+                                            int(r + (inv[0] - r) * k),
+                                            int(g + (inv[1] - g) * k),
+                                            int(b + (inv[2] - b) * k),
+                                        )
+                elif style_inverse:
+                    # F：黑底；前景默认白，若有颜色标记则用该颜色
                     fill = style_color if style_color else (255, 255, 255)
                     th = text_height(draw, text if text else '中', font)
                     tw = text_width(draw, text if text else '', font)
@@ -763,9 +898,10 @@ class Main():
                         fill=(0, 0, 0),
                         outline=None,
                     )
+                    draw_text_mixed(draw, (x, y), text, fill, font, bold=bool(style_bold))
                 else:
                     fill = style_color if style_color else text_color
-                draw_text_mixed(draw, (x, y), text, fill, font, bold=bool(style_bold))
+                    draw_text_mixed(draw, (x, y), text, fill, font, bold=bool(style_bold))
 
             filename = f"./homework_image/{date}.jpg"
             filepath = os.path.abspath(filename)
@@ -866,11 +1002,14 @@ class Main():
                 borderwidth=[('active', 0), ('pressed', 0)],    # 外边框宽度设为 0
                 highlightthickness=[('active', 0), ('pressed', 0)],)    # 高亮边框宽度设为 0
 
+        tk.Label(self.root, bg=WINDOWBG, fg=SECONDARYTEXTFG, anchor='w',text='双击科目或作业进入编辑模式,记得点击"保存作业"按钮!').place(x=20, y=750, width=860, height=30)
+
+
         self.scrollbar_treeview_y=DScrollbar(self.root)
-        self.scrollbar_treeview_y.place(x=870,y=20,width=30,height=760)
+        self.scrollbar_treeview_y.place(x=870,y=20,width=30,height=720)
         self.treeview_homework= ttk.Treeview(self.root, show="tree headings", columns=["homework"],takefocus=True,
                                           selectmode='browse', yscrollcommand=self.scrollbar_treeview_y.set,style='Main.Treeview')
-        self.treeview_homework.place(x=20,y=20,width=850,height=760)
+        self.treeview_homework.place(x=20,y=20,width=850,height=720)
 
         self.scrollbar_treeview_y.config(command=self.treeview_homework.yview)
 
@@ -889,7 +1028,7 @@ class Main():
 
         def on_treeview_close(event):
             item = self.treeview_homework.focus()
-            #self._update_subject_state(item)
+       
             self.root.after_idle(lambda: self._update_subject_state(item))
             self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
 
@@ -1719,7 +1858,7 @@ class Main():
             - O：加粗，有则删、无则加（可与颜色、反色共存）
             - F：反色（黑底，前景默认白），有则删、无则加（可与颜色、加粗共存）
             - R/G/Y/B：末尾只允许一个颜色；点新颜色会替换旧颜色；再点同一颜色则去掉
-            只处理末尾连续的 RGYBOF.
+            只处理末尾连续的 RGYBOFHH.
             """
             if edit_entry[0] is None:
                 win32api.MessageBeep()
@@ -1746,7 +1885,14 @@ class Main():
                 if 'F' in markers:
                     markers = [m for m in markers if m != 'F']
                 else:
+                    markers = [m for m in markers if m != 'H']
                     markers.append('F')
+            elif letter == 'H':
+                if 'H' in markers:
+                    markers = [m for m in markers if m != 'H']
+                else:
+                    markers = [m for m in markers if m != 'F']
+                    markers.append('H')
             elif letter in color_letters:
                 if letter in markers:
                     # 再点同一颜色 → 去掉该颜色，保留 O/F
@@ -1761,6 +1907,7 @@ class Main():
             # 规范化顺序：颜色 → F → O，且各最多一个
             has_o = 'O' in markers
             has_f = 'F' in markers
+            has_h = 'H' in markers
             colors = [m for m in markers if m in color_letters]
             color = colors[-1] if colors else None
             tail = ''
@@ -1768,6 +1915,8 @@ class Main():
                 tail += color
             if has_f:
                 tail += 'F'
+            if has_h:
+                tail += 'H'
             if has_o:
                 tail += 'O'
             new_s = body + tail
@@ -1801,6 +1950,7 @@ class Main():
             ('B', HIGHLIGHT),
             ('O', TEXTFG),
             ('F', TEXTFG),  # 反色：黑底，前景默认白
+            ('H', TEXTFG),  # 背景像素反色显示文字
         ]
         for letter, fg in style_btns:
             try:
@@ -3142,7 +3292,6 @@ class Main():
         window_settings.wait_window()
 
 
-
     def open_advanced_settings_window(self, parent=None):
         """高级设置：三列表格（说明 / 变量名 / 值），双击值列编辑.
         数字用 DSpinbox;字符串/JSON 用 DEntry.
@@ -3160,34 +3309,35 @@ class Main():
             'EXPORT_START_Y', 'EXPORT_GAP_CENTER',
         }
 
-        def close_adv(event=None):
-            win.destroy()
+        def close_advanced_settings(event=None):
+            window_advanced_settings.destroy()
             parent.focus()
-        win = tk.Toplevel(parent)
-        win.title('高级设置')
-        SetDarkTitleBar(win)
-        w, h = 900, 560
-        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
-        win.geometry('%dx%d+%d+%d' % (w, h, (sw - w) // 2, (sh - h) // 2))
-        win['bg'] = WINDOWBG
-        win.protocol('WM_DELETE_WINDOW', close_adv)
-        win.bind('<Escape>', close_adv)
-        win.focus()
 
-        tk.Label(
-            win, bg=WINDOWBG, fg=SECONDARYTEXTFG, anchor='w',
-            text='双击「值」列编辑,重新打开软件后生效.',
-        ).place(x=20, y=10, width=860, height=30)
+        window_advanced_settings = tk.Toplevel(parent)
+        window_advanced_settings.title('高级设置')
+        SetDarkTitleBar(window_advanced_settings)
+        window_width, window_height = 900, 560
+        screen_width = window_advanced_settings.winfo_screenwidth()
+        screen_height = window_advanced_settings.winfo_screenheight()
+        window_advanced_settings.geometry('%dx%d+%d+%d'%(window_width, window_height, (screen_width - window_width) // 2,(screen_height - window_height) // 2,))
+        window_advanced_settings['bg'] = WINDOWBG
+        window_advanced_settings.protocol('WM_DELETE_WINDOW', close_advanced_settings)
+        window_advanced_settings.bind('<Escape>', close_advanced_settings)
+        window_advanced_settings.focus()
+
+        tk.Label(window_advanced_settings, bg=WINDOWBG, fg=SECONDARYTEXTFG, anchor='w',text='双击"值"列编辑,重新打开软件后生效.',).place(x=20, y=10, width=860, height=30)
 
         style = ttk.Style()
         style.theme_use('alt')
         style.configure(
             'Adv.Treeview', rowheight=28,
             fieldbackground=WINDOWBG, background=WINDOWBG, foreground=TEXTFG,
-            borderwidth=0, highlightthickness=0,)
+            borderwidth=0, highlightthickness=0,
+        )
         style.configure(
             'Adv.Treeview.Heading',
-            background=WINDOWBG, foreground=TEXTFG, borderwidth=0, highlightthickness=0,)
+            background=WINDOWBG, foreground=TEXTFG, borderwidth=0, highlightthickness=0,
+        )
         style.map(
             'Adv.Treeview.Heading',
             background=[('active', WIDGETBG), ('pressed', WINDOWBG)],
@@ -3199,153 +3349,159 @@ class Main():
             foreground=[('selected', TEXTFG)],
         )
 
-        scroll = DScrollbar(win, bg=WINDOWBG)
-        scroll.place(x=860, y=50, width=20, height=450)
-        tree = ttk.Treeview(
-            win, show='headings', columns=('desc', 'name', 'value'),
-            selectmode='browse', yscrollcommand=scroll.set, style='Adv.Treeview',
+        scrollbar_advanced = DScrollbar(window_advanced_settings, bg=WINDOWBG)
+        scrollbar_advanced.place(x=860, y=50, width=20, height=450)
+        treeview_advanced = ttk.Treeview(
+            window_advanced_settings, show='headings', columns=('desc', 'name', 'value'),
+            selectmode='browse', yscrollcommand=scrollbar_advanced.set, style='Adv.Treeview',
         )
-        tree.place(x=20, y=50, width=840, height=450)
-        scroll.config(command=tree.yview)
-        SetBorder(tree)
+        treeview_advanced.place(x=20, y=50, width=840, height=450)
+        scrollbar_advanced.config(command=treeview_advanced.yview)
+        SetBorder(treeview_advanced)
 
-        tree.heading('desc', text='说明', anchor='center')
-        tree.heading('name', text='变量名', anchor='center')
-        tree.heading('value', text='值', anchor='center')
-        tree.column('desc', width=300, anchor='w')
-        tree.column('name', width=240, anchor='w')
-        tree.column('value', width=290, anchor='w')
+        treeview_advanced.heading('desc', text='说明', anchor='center')
+        treeview_advanced.heading('name', text='变量名', anchor='center')
+        treeview_advanced.heading('value', text='值', anchor='center')
+        treeview_advanced.column('desc', width=300, anchor='w')
+        treeview_advanced.column('name', width=240, anchor='w')
+        treeview_advanced.column('value', width=290, anchor='w')
 
-        
-        work = {}
+        work_settings = {}
         for _desc, key in ADVANCED_SETTING_ROWS:
             if key == 'YAHEI_TEXT_FONT':
-                work[key] = copy.deepcopy(self.settings.get(key, YAHEI_TEXT_FONT))
+                work_settings[key] = copy.deepcopy(self.settings.get(key, YAHEI_TEXT_FONT))
             else:
-                work[key] = copy.deepcopy(self._cfg(key, DEFAULT_EXPORT_SETTINGS.get(key)))
+                work_settings[key] = copy.deepcopy(self._cfg(key, DEFAULT_EXPORT_SETTINGS.get(key)))
 
-        def value_to_display(v):
-            if isinstance(v, (list, dict, tuple)):
+        def value_to_display(value):
+            if isinstance(value, (list, dict, tuple)):
                 try:
-                    return json.dumps(v, ensure_ascii=False)
+                    return json.dumps(value, ensure_ascii=False)
                 except Exception:
-                    return str(v)
-            return str(v)
+                    return str(value)
+            return str(value)
 
         def refresh_rows():
-            for iid in tree.get_children():
-                tree.delete(iid)
+            for item_id in treeview_advanced.get_children():
+                treeview_advanced.delete(item_id)
             for desc, key in ADVANCED_SETTING_ROWS:
-                tree.insert('', 'end', iid=key, values=(desc, key, value_to_display(work.get(key, ''))))
-            win.after_idle(lambda: SetExpandedTreeviewRowColor(tree))
+                treeview_advanced.insert(
+                    '', 'end', iid=key,
+                    values=(desc, key, value_to_display(work_settings.get(key, ''))),
+                )
+            window_advanced_settings.after_idle(lambda: SetExpandedTreeviewRowColor(treeview_advanced))
         refresh_rows()
 
-        def parse_value(key, text_val):
-            text_val = (text_val or '').strip()
+        def parse_value(key, text_value):
+            text_value = (text_value or '').strip()
             default = DEFAULT_EXPORT_SETTINGS.get(key)
 
             if key == 'YAHEI_TEXT_FONT':
-                if text_val.startswith('['):
-                    return json.loads(text_val)
-                return text_val
+                if text_value.startswith('['):
+                    return json.loads(text_value)
+                return text_value
             if key in ('EXPORT_FONT_FALLBACK_NAMES', 'highlight_box'):
-                return json.loads(text_val)
+                return json.loads(text_value)
             if key == 'EXPORT_FONT_NAME':
-                return text_val
+                return text_value
             if key in SPINBOX_KEYS:
-                return int(float(text_val)) if text_val not in ('', '-',) else int(default or 0)
+                return int(float(text_value)) if text_value not in ('', '-',) else int(default or 0)
             try:
-                if '.' in text_val:
-                    return float(text_val)
-                return int(text_val)
+                if '.' in text_value:
+                    return float(text_value)
+                return int(text_value)
             except Exception:
-                return text_val
+                return text_value
 
         # 当前编辑器引用（DEntry 或 DSpinbox）
         editor_ref = [None]
 
         def is_widget_or_descendant(widget, root_widget):
             """判断 widget 是否为 root_widget 或其子孙."""
-            w = widget
-            while w is not None:
-                if w is root_widget:
+            current = widget
+            while current is not None:
+                if current is root_widget:
                     return True
-                w = getattr(w, 'master', None)
-                if w is None:
+                current = getattr(current, 'master', None)
+                if current is None:
                     break
             return False
 
         def destroy_editor():
-            ed = editor_ref[0]
+            editor = editor_ref[0]
             editor_ref[0] = None
-            if ed is None:
+            if editor is None:
                 return
-            ed.destroy()
+            editor.destroy()
+
         def on_double_click(event):
             # 已有编辑器时先不重复创建
             if editor_ref[0] is not None:
                 return 'break'
 
-            row_id = tree.focus()
+            row_id = treeview_advanced.focus()
             if not row_id:
-                # 鼠标双击时尝试 identify_row
                 if hasattr(event, 'y'):
-                    row_id = tree.identify_row(event.y)
+                    row_id = treeview_advanced.identify_row(event.y)
                 if not row_id:
                     return
             if hasattr(event, 'x') and event.x > 0:
-                column = tree.identify_column(event.x)
+                column = treeview_advanced.identify_column(event.x)
             else:
                 column = '#3'
             if column != '#3':
                 return 'break'
-            bbox = tree.bbox(row_id, column)
+            bbox = treeview_advanced.bbox(row_id, column)
             if not bbox:
                 return 'break'
             x, y, width, height = bbox
-            vals = tree.item(row_id, 'values')
-            current_value = vals[2] if len(vals) > 2 else ''
+            values = treeview_advanced.item(row_id, 'values')
+            current_value = values[2] if len(values) > 2 else ''
             key = row_id
 
             use_spin = key in SPINBOX_KEYS
             use_combo = (key == 'color_mode')
 
             if use_spin:
-                # 合理上下限
-                lo, hi = -10 ** 9, 10 ** 9
+                min_value, max_value = -10 ** 9, 10 ** 9
                 if 'MIN' in key:
-                    lo, hi = 1, 500
+                    min_value, max_value = 1, 500
                 elif 'FONT' in key and 'NAME' not in key:
-                    lo, hi = 1, 500
+                    min_value, max_value = 1, 500
                 elif 'SPACING' in key or 'GAP' in key:
-                    lo, hi = 0, 2000
+                    min_value, max_value = 0, 2000
                 elif 'MARGIN' in key or '_Y' in key or '_X' in key:
-                    lo, hi = 0, 5000
-                editor = DSpinbox(tree, int_only=True, from_=lo, to=hi, increment=1)
+                    min_value, max_value = 0, 5000
+                editor = DSpinbox(treeview_advanced, int_only=True, from_=min_value, to=max_value, increment=1)
                 editor.delete(0, tk.END)
                 try:
-                    editor.insert(0, str(int(float(current_value))) if current_value not in ('',) else '0')
+                    editor.insert(
+                        0,
+                        str(int(float(current_value))) if current_value not in ('',) else '0',
+                    )
                 except (TypeError, ValueError):
                     editor.insert(0, current_value or '0')
                 get_text = lambda: editor.get()
                 focus_target = editor
             elif use_combo:
                 # color_mode 仅允许 system / dark / light
-                editor = DCombobutton(tree, values=['system', 'dark', 'light'], state='readonly',)
+                editor = DCombobutton(
+                    treeview_advanced, values=['system', 'dark', 'light'], state='readonly',
+                )
                 try:
-                    editor['state']='normal'
+                    editor['state'] = 'normal'
                     editor.delete(0, tk.END)
-                    cur = (current_value or 'system').strip().lower()
-                    if cur not in ('system', 'dark', 'light'):
-                        cur = 'system'
-                    editor.insert(0, cur)
-                    editor['state']='readonly'
+                    current_mode = (current_value or 'system').strip().lower()
+                    if current_mode not in ('system', 'dark', 'light'):
+                        current_mode = 'system'
+                    editor.insert(0, current_mode)
+                    editor['state'] = 'readonly'
                 except Exception:
                     editor.insert(0, 'system')
                 get_text = lambda: editor.get()
                 focus_target = editor
             else:
-                editor = DEntry(tree)
+                editor = DEntry(treeview_advanced)
                 editor.insert('end', current_value)
                 editor.icursor('end')
                 get_text = lambda: editor.get()
@@ -3356,14 +3512,13 @@ class Main():
             editor_ref[0] = editor
 
             def apply_edit(event=None):
-                ed = editor_ref[0]
-                if ed is None:
+                editor_widget = editor_ref[0]
+                if editor_widget is None:
                     return
                 # 若焦点仍在编辑器内部（含 DSpinbox 的 +/- 按钮），不结束编辑
-                fw = win.focus_get()
-                if fw is not None and is_widget_or_descendant(fw, ed):
+                focus_widget = window_advanced_settings.focus_get()
+                if focus_widget is not None and is_widget_or_descendant(focus_widget, editor_widget):
                     return
-                # 滚动等外部操作会强制结束：此时用 force 参数
                 _commit_editor()
 
             def apply_edit_force(event=None):
@@ -3371,49 +3526,56 @@ class Main():
                 _commit_editor()
 
             def _commit_editor():
-                ed = editor_ref[0]
-                if ed is None:
+                editor_widget = editor_ref[0]
+                if editor_widget is None:
                     return
                 editor_ref[0] = None
                 _unbind_scroll()
                 new_value = get_text()
-                key_local = getattr(ed, 'row_id', None)
-                ed.destroy()
+                key_local = getattr(editor_widget, 'row_id', None)
+                editor_widget.destroy()
                 if not key_local:
-                    tree.focus_set()
+                    treeview_advanced.focus_set()
                     return
                 try:
                     parsed = parse_value(key_local, new_value)
-                except Exception as e:
+                except Exception as error:
                     MessageBoxModern(
-                        parent=win, title='错误', icon='error',
-                        text_blod='值格式错误', text=str(e),
+                        parent=window_advanced_settings, title='错误', icon='error',
+                        text_blod='值格式错误', text=str(error),
                     )
-                    tree.focus_set()
+                    treeview_advanced.focus_set()
                     return
                 if key_local == 'highlight_box':
                     if not (isinstance(parsed, (list, tuple)) and len(parsed) >= 4):
                         MessageBoxModern(
-                            parent=win, title='错误', icon='error',
+                            parent=window_advanced_settings, title='错误', icon='error',
                             text_blod='高亮矩形格式错误',
                             text='需要长度为4的数组: [x, y, 宽, 高]',
                         )
-                        tree.focus_set()
+                        treeview_advanced.focus_set()
                         return
                     parsed = [int(parsed[0]), int(parsed[1]), int(parsed[2]), int(parsed[3])]
-                work[key_local] = parsed
-                tree.item(key_local, values=(tree.item(key_local, 'values')[0], key_local, value_to_display(parsed)))
-                tree.focus_set()
+                work_settings[key_local] = parsed
+                treeview_advanced.item(
+                    key_local,
+                    values=(
+                        treeview_advanced.item(key_local, 'values')[0],
+                        key_local,
+                        value_to_display(parsed),
+                    ),
+                )
+                treeview_advanced.focus_set()
 
             def cancel_edit(event=None):
                 _unbind_scroll()
                 destroy_editor()
-                tree.focus_set()
+                treeview_advanced.focus_set()
 
             editor.place(x=x, y=y, width=width, height=height)
             # 回车确认、Esc 取消
             if use_spin:
-                editor.Entry.bind('<Return>', lambda e: apply_edit_force())
+                editor.Entry.bind('<Return>', lambda event: apply_edit_force())
                 editor.Entry.bind('<Escape>', cancel_edit)
                 # FocusOut：若焦点去了 +/- 则不提交
                 editor.Entry.bind('<FocusOut>', apply_edit)
@@ -3421,28 +3583,29 @@ class Main():
                 editor.DButton_up.bind('<FocusOut>', apply_edit)
                 editor.DButton_down.bind('<FocusOut>', apply_edit)
             elif use_combo:
-                editor.Entry.bind('<Return>', lambda e: apply_edit_force())
+                editor.Entry.bind('<Return>', lambda event: apply_edit_force())
                 editor.Entry.bind('<Escape>', cancel_edit)
                 editor.Entry.bind('<FocusOut>', apply_edit)
                 editor.bind('<FocusOut>', apply_edit)
                 editor.DButton_show_list.bind('<FocusOut>', apply_edit)
             else:
-                editor.bind('<Return>', lambda e: apply_edit_force())
+                editor.bind('<Return>', lambda event: apply_edit_force())
                 editor.bind('<Escape>', cancel_edit)
                 editor.bind('<FocusOut>', apply_edit)
 
             # 与 MCLangTool 一致：滚动表格/拖动滚动条时结束编辑
-            bind_ids = [
-                (tree, '<MouseWheel>', tree.bind('<MouseWheel>', apply_edit_force, add='+')),
-                (scroll, '<MouseWheel>', scroll.bind('<MouseWheel>', apply_edit_force, add='+')),
-                (scroll, '<B1-Motion>', scroll.bind('<B1-Motion>', apply_edit_force, add='+')),
+            scroll_bind_ids = [
+                (treeview_advanced, '<MouseWheel>', treeview_advanced.bind('<MouseWheel>', apply_edit_force, add='+')),
+                (scrollbar_advanced, '<MouseWheel>', scrollbar_advanced.bind('<MouseWheel>', apply_edit_force, add='+')),
+                (scrollbar_advanced, '<B1-Motion>', scrollbar_advanced.bind('<B1-Motion>', apply_edit_force, add='+')),
             ]
-            editor._scroll_bind_ids = bind_ids
+            editor._scroll_bind_ids = scroll_bind_ids
 
             def _unbind_scroll():
-                for widget, seq, fid in getattr(editor, '_scroll_bind_ids', []) or []:
-                    widget.unbind(seq, fid)
+                for widget, sequence, bind_id in getattr(editor, '_scroll_bind_ids', []) or []:
+                    widget.unbind(sequence, bind_id)
                 editor._scroll_bind_ids = []
+
             focus_target.focus_set()
             if use_spin or use_combo:
                 editor.Entry.select_range(0, tk.END)
@@ -3450,137 +3613,161 @@ class Main():
                 editor.select_range(0, tk.END)
             return 'break'
 
-        tree.bind('<Double-Button-1>', on_double_click)
-        tree.bind('<Return>', on_double_click)
-        tree.bind('<F2>', on_double_click)
+        treeview_advanced.bind('<Double-Button-1>', on_double_click)
+        treeview_advanced.bind('<Return>', on_double_click)
+        treeview_advanced.bind('<F2>', on_double_click)
 
-        def save_adv():
+        def save_advanced_settings():
             global YAHEI_TEXT_FONT
             # 若仍在编辑，先提交
             if editor_ref[0] is not None:
-                # 强制提交
-                ed = editor_ref[0]
-                if isinstance(ed, DSpinbox) or isinstance(ed, DCombobutton):
-                    txt = ed.Entry.get()
+                editor_widget = editor_ref[0]
+                if isinstance(editor_widget, DSpinbox) or isinstance(editor_widget, DCombobutton):
+                    text_value = editor_widget.Entry.get()
                 else:
-                    txt = ed.get()
-                key = ed.row_id
-                parsed = parse_value(key, txt)
+                    text_value = editor_widget.get()
+                key = editor_widget.row_id
+                parsed = parse_value(key, text_value)
                 if key == 'highlight_box' and isinstance(parsed, (list, tuple)) and len(parsed) >= 4:
                     parsed = [int(parsed[0]), int(parsed[1]), int(parsed[2]), int(parsed[3])]
-                work[key] = parsed
+                work_settings[key] = parsed
                 destroy_editor()
 
-            for key, val in work.items():
-                self.settings[key] = val
+            for key, value in work_settings.items():
+                self.settings[key] = value
                 if key != 'YAHEI_TEXT_FONT':
                     if not hasattr(self, 'export_cfg'):
                         self.export_cfg = dict(DEFAULT_EXPORT_SETTINGS)
-                    self.export_cfg[key] = val
-            if 'YAHEI_TEXT_FONT' in work:
-                YAHEI_TEXT_FONT = work['YAHEI_TEXT_FONT']
+                    self.export_cfg[key] = value
+            if 'YAHEI_TEXT_FONT' in work_settings:
+                YAHEI_TEXT_FONT = work_settings['YAHEI_TEXT_FONT']
                 self.settings['YAHEI_TEXT_FONT'] = YAHEI_TEXT_FONT
-            if 'color_mode' in work:
-                cm = str(work['color_mode'] or 'system').strip().lower()
-                if cm not in ('system', 'dark', 'light'):
-                    cm = 'system'
-                self.color_mode = cm
-                self.settings['color_mode'] = cm
+            if 'color_mode' in work_settings:
+                color_mode_value = str(work_settings['color_mode'] or 'system').strip().lower()
+                if color_mode_value not in ('system', 'dark', 'light'):
+                    color_mode_value = 'system'
+                self.color_mode = color_mode_value
+                self.settings['color_mode'] = color_mode_value
                 if hasattr(self, 'export_cfg'):
-                    self.export_cfg['color_mode'] = cm
+                    self.export_cfg['color_mode'] = color_mode_value
             try:
-                with open('homeworktool_settings.json', 'w', encoding='utf-8') as f:
-                    json.dump(self.settings, f, ensure_ascii=False, indent=2)
+                with open('homeworktool_settings.json', 'w', encoding='utf-8') as file:
+                    json.dump(self.settings, file, ensure_ascii=False, indent=2)
             except Exception:
                 MessageBoxModern(
-                    parent=win, title='错误', icon='error',
+                    parent=window_advanced_settings, title='错误', icon='error',
                     text_blod='保存高级设置失败', text=traceback.format_exc(),
                 )
                 return
-            close_adv()
+            close_advanced_settings()
 
-        button_ok_advanced=DButton(win, text='确定', default='active', command=save_adv)
+        button_ok_advanced = DButton(
+            window_advanced_settings, text='确定', default='active', command=save_advanced_settings,
+        )
         button_ok_advanced.place(x=700, y=515, width=80, height=30)
         button_ok_advanced.unbind_default_active()
 
-        button_cancel_advanced=DButton(win, text='取消', command=close_adv)
+        button_cancel_advanced = DButton(
+            window_advanced_settings, text='取消', command=close_advanced_settings,
+        )
         button_cancel_advanced.place(x=800, y=515, width=80, height=30)
         button_cancel_advanced.unbind_default_active()
 
-        ConvertPlaceToRelative(win)
-        win.iconbitmap(f'{libresource}icon.ico')
-        win.wait_window()
+        ConvertPlaceToRelative(window_advanced_settings)
+        window_advanced_settings.iconbitmap(f'{libresource}icon.ico')
+        window_advanced_settings.wait_window()
 
     def open_background_image_settings_window(self, parent=None):
         """导出图片背景：纯色 / 图片 + 拉伸模式，写入 settings 并同步 export_cfg."""
         parent = parent or self.root
 
-        def close_win(event=None):
-            win.destroy()
+        def close_background_settings(event=None):
+            window_background_settings.destroy()
             parent.focus()
-        win = tk.Toplevel(parent)
-        win.title('背景图像设置')
-        SetDarkTitleBar(win)
-        w, h = 720, 320
-        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
-        win.geometry('%dx%d+%d+%d' % (w, h, (sw - w) // 2, (sh - h) // 2))
-        win['bg'] = WINDOWBG
-        win.protocol('WM_DELETE_WINDOW', close_win)
-        win.bind('<Escape>', close_win)
-        win.focus()
+
+        window_background_settings = tk.Toplevel(parent)
+        window_background_settings.title('背景图像设置')
+        SetDarkTitleBar(window_background_settings)
+        window_width, window_height = 720, 320
+        screen_width = window_background_settings.winfo_screenwidth()
+        screen_height = window_background_settings.winfo_screenheight()
+        window_background_settings.geometry(
+            '%dx%d+%d+%d' % (
+                window_width, window_height,
+                (screen_width - window_width) // 2,
+                (screen_height - window_height) // 2,
+            )
+        )
+        window_background_settings['bg'] = WINDOWBG
+        window_background_settings.protocol('WM_DELETE_WINDOW', close_background_settings)
+        window_background_settings.bind('<Escape>', close_background_settings)
+        window_background_settings.focus()
 
         # 当前值
-        cur_mode = str(self._cfg('background_mode', '纯色') or '纯色')
-        if cur_mode not in ('纯色', '图片'):
-            cur_mode = '纯色'
-        cur_color = str(self._cfg('background_color', '#FAF9E6') or '#FAF9E6')
-        cur_path = str(self._cfg('background_image_path', '') or '')
-        cur_stretch = str(self._cfg('background_stretch_mode', '完全拉伸') or '完全拉伸')
-        if cur_stretch not in ('完全拉伸', '横向拉伸', '纵向拉伸', '不拉伸'):
-            cur_stretch = '完全拉伸'
+        current_mode = str(self._cfg('background_mode', '纯色') or '纯色')
+        if current_mode not in ('纯色', '图片'):
+            current_mode = '纯色'
+        current_color = str(self._cfg('background_color', '#FAF9E6') or '#FAF9E6')
+        current_path = str(self._cfg('background_image_path', '') or '')
+        current_stretch = str(self._cfg('background_stretch_mode', '完全拉伸') or '完全拉伸')
+        if current_stretch not in ('完全拉伸', '横向拉伸', '纵向拉伸', '不拉伸'):
+            current_stretch = '完全拉伸'
 
-        tk.Label(win, text='背景图底色:', anchor='w', bg=WINDOWBG, fg=TEXTFG).place(x=20, y=20, width=120, height=30)
-        entry_background_color = DEntry(win)
-        entry_background_color.insert(0, cur_color)
+        tk.Label(
+            window_background_settings, text='背景图底色:', anchor='w', bg=WINDOWBG, fg=TEXTFG,
+        ).place(x=20, y=20, width=120, height=30)
+        entry_background_color = DEntry(window_background_settings)
+        entry_background_color.insert(0, current_color)
         entry_background_color.place(x=150, y=20, width=150, height=30)
 
-        preview_swatch = tk.Label(win, bg=cur_color if cur_color.startswith('#') else '#FAF9E6', bd=1, relief='solid')
+        preview_swatch = tk.Label(
+            window_background_settings,
+            bg=current_color if current_color.startswith('#') else '#FAF9E6',
+            bd=1, relief='solid',
+        )
         preview_swatch.place(x=310, y=20, width=40, height=30)
 
         def update_swatch(event=None):
-            c = entry_background_color.get().strip()
-            rgb = self._parse_bg_color(c)
+            color_text = entry_background_color.get().strip()
+            rgb = self._parse_bg_color(color_text)
             preview_swatch.config(bg='#{:02x}{:02x}{:02x}'.format(*rgb))
         entry_background_color.bind('<KeyRelease>', update_swatch, add='+')
         entry_background_color.bind('<FocusOut>', update_swatch, add='+')
 
         def pick_color():
-            rgb_tuple, hx = colorchooser.askcolor(
+            rgb_tuple, hex_color = colorchooser.askcolor(
                 color=preview_swatch.cget('bg'),
-                parent=win,
+                parent=window_background_settings,
                 title='选择背景底色',
             )
-            if hx:
+            if hex_color:
                 entry_background_color.delete(0, 'end')
-                entry_background_color.insert(0, hx.upper())
+                entry_background_color.insert(0, hex_color.upper())
                 update_swatch()
 
-        button_pick_color = DButton(win, text='取色', command=pick_color)
+        button_pick_color = DButton(window_background_settings, text='取色', command=pick_color)
         button_pick_color.place(x=360, y=20, width=60, height=30)
 
-        tk.Label(win, text='背景图模式:', anchor='w', bg=WINDOWBG, fg=TEXTFG).place(x=20, y=70, width=120, height=30)
-        var_background_mode = tk.StringVar(value=cur_mode)
-        entry_background_mode = DCombobutton(win, values=['纯色', '图片'], textvariable=var_background_mode, state='readonly')
+        tk.Label(
+            window_background_settings, text='背景图模式:', anchor='w', bg=WINDOWBG, fg=TEXTFG,
+        ).place(x=20, y=70, width=120, height=30)
+        var_background_mode = tk.StringVar(value=current_mode)
+        entry_background_mode = DCombobutton(
+            window_background_settings, values=['纯色', '图片'],
+            textvariable=var_background_mode, state='readonly',
+        )
         entry_background_mode.place(x=150, y=70, width=150, height=30)
 
-        tk.Label(win, text='背景图文件:', anchor='w', bg=WINDOWBG, fg=TEXTFG).place(x=20, y=120, width=120, height=30)
-        entry_background_file = DEntry(win)
-        entry_background_file.insert(0, cur_path)
+        tk.Label(
+            window_background_settings, text='背景图文件:', anchor='w', bg=WINDOWBG, fg=TEXTFG,
+        ).place(x=20, y=120, width=120, height=30)
+        entry_background_file = DEntry(window_background_settings)
+        entry_background_file.insert(0, current_path)
         entry_background_file.place(x=150, y=120, width=400, height=30)
 
         def browse_file():
             path = filedialog.askopenfilename(
-                parent=win,
+                parent=window_background_settings,
                 title='选择背景图片',
                 filetypes=[
                     ('图片文件', '*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.webp'),
@@ -3591,13 +3778,17 @@ class Main():
                 entry_background_file.delete(0, 'end')
                 entry_background_file.insert(0, path)
 
-        button_open_browse_file_dialog = DButton(win, text='浏览', command=browse_file)
+        button_open_browse_file_dialog = DButton(
+            window_background_settings, text='浏览', command=browse_file,
+        )
         button_open_browse_file_dialog.place(x=560, y=120, width=60, height=30)
 
-        tk.Label(win, text='拉伸模式:', anchor='w', bg=WINDOWBG, fg=TEXTFG).place(x=20, y=170, width=120, height=30)
-        var_background_stretch_mode = tk.StringVar(value=cur_stretch)
+        tk.Label(
+            window_background_settings, text='拉伸模式:', anchor='w', bg=WINDOWBG, fg=TEXTFG,
+        ).place(x=20, y=170, width=120, height=30)
+        var_background_stretch_mode = tk.StringVar(value=current_stretch)
         entry_background_stretch_mode = DCombobutton(
-            win,
+            window_background_settings,
             values=['完全拉伸', '横向拉伸', '纵向拉伸', '不拉伸'],
             textvariable=var_background_stretch_mode,
             state='readonly',
@@ -3605,7 +3796,7 @@ class Main():
         entry_background_stretch_mode.place(x=150, y=170, width=150, height=30)
 
         tk.Label(
-            win, bg=WINDOWBG, fg=SECONDARYTEXTFG, anchor='w',
+            window_background_settings, bg=WINDOWBG, fg=SECONDARYTEXTFG, anchor='w',
             text='说明:底色在「纯色」模式下作为整图背景;「图片」模式下作为未铺满区域的填充色.',
         ).place(x=20, y=220, width=680, height=30)
 
@@ -3636,7 +3827,7 @@ class Main():
                 stretch = '完全拉伸'
             if mode == '图片' and path and not os.path.isfile(path):
                 MessageBoxModern(
-                    parent=win, title='错误', icon='error',
+                    parent=window_background_settings, title='错误', icon='error',
                     text_blod='背景图文件不存在',
                     text=path,
                 )
@@ -3652,27 +3843,30 @@ class Main():
             self.export_cfg['background_image_path'] = path
             self.export_cfg['background_stretch_mode'] = stretch
             try:
-                with open('homeworktool_settings.json', 'w', encoding='utf-8') as f:
-                    json.dump(self.settings, f, ensure_ascii=False, indent=2)
+                with open('homeworktool_settings.json', 'w', encoding='utf-8') as file:
+                    json.dump(self.settings, file, ensure_ascii=False, indent=2)
             except Exception:
                 MessageBoxModern(
-                    parent=win, title='错误', icon='error',
+                    parent=window_background_settings, title='错误', icon='error',
                     text_blod='保存背景设置失败',
                     text=traceback.format_exc(),
                 )
                 return
-            close_win()
+            close_background_settings()
 
-        button_ok = DButton(win, text='确定', default='active', command=save_and_close)
+        button_ok = DButton(
+            window_background_settings, text='确定', default='active', command=save_and_close,
+        )
         button_ok.place(x=520, y=270, width=80, height=30)
         button_ok.unbind_default_active()
-        button_cancel = DButton(win, text='取消', command=close_win)
+        button_cancel = DButton(
+            window_background_settings, text='取消', command=close_background_settings,
+        )
         button_cancel.place(x=620, y=270, width=80, height=30)
         button_cancel.unbind_default_active()
-        ConvertPlaceToRelative(win)
-        win.iconbitmap(f'{libresource}icon.ico')
-        win.wait_window()
-
+        ConvertPlaceToRelative(window_background_settings)
+        window_background_settings.iconbitmap(f'{libresource}icon.ico')
+        window_background_settings.wait_window()
 
     def about(self,event=None):
         def set_label_font(label, add_size=3,bold=False):
