@@ -1,4 +1,4 @@
-VERSION="1.2.5"
+VERSION="1.2.6"
 #一定要放在第一行
 import  os, sys, win32api, webbrowser, json,  datetime,traceback, ctypes, copy,re
 from tkinter import  filedialog, colorchooser
@@ -152,7 +152,7 @@ def parse_homework_style(content):
 
 
 
-def get_online_version(url: str) -> list:
+def get_ONLINE_VERSION(url: str) -> list:
     # 获取 GitHub 文本文件第一行，通过 exec 解析版本号，
     # 并返回形如 [1, 0, 2] 的整数列表。
     
@@ -328,42 +328,210 @@ class Main():
             )
             self.attendance_history = {}
 
+    def layout_window(self,):
+        self.root=tk.Tk()
+        self.root.title('万岁™作业布置与展示工具    (合肥市阳光中学特供版 & 合肥市第一中学特供版)')
+        SetDarkTitleBar(self.root)
+        width = 1200
+        height = 800
+        screenwidth = self.root.winfo_screenwidth()
+        screenheight = self.root.winfo_screenheight()
+        geometry = '%dx%d+%d+%d' % (width, height, (screenwidth - width) / 2, (screenheight - height) / 2)
+        self.root.geometry(geometry)
+        self.root['bg']=WINDOWBG
+        self.root.protocol('WM_DELETE_WINDOW', self.exit_app)
+
+
+        if isinstance(YAHEI_TEXT_FONT,str):
+            self.font_icon=tkfont.Font(family='WS_Segoe_MDL2_Assets',size=9)
+        else:
+            self.font_icon=tkfont.Font(family='WS_Segoe_MDL2_Assets',size=self.settings.get('YAHEI_TEXT_FONT',['微软雅黑', 12])[1])
+
+
+        threading.Thread(target=self.check_update,daemon=True).start()
+
+        style = ttk.Style()
+        style.theme_use("alt")
+
+        style.configure("Main.Treeview", rowheight=40,
+                        fieldbackground=WINDOWBG,
+                        background=WINDOWBG,
+                        foregroung=TEXTFG,
+                        borderwidth=0,
+                        highlightthickness=0,
+                        font=YAHEI_TEXT_FONT ) # 填充背景色
+   
+        style.configure("Main.Treeview.Heading",
+                        background=WINDOWBG,      # 表头背景色
+                        foreground=TEXTFG,        # 表头文字颜色
+                        borderwidth=0,
+                        highlightthickness=0,
+                        font=YAHEI_TEXT_FONT)          # 扁平化边框
+        # 3. 关键步骤：锁死动态样式（防止鼠标悬停或点击时变回系统默认的灰色）
+        
+        style.map("Main.Treeview.Heading",
+                background=[('active', WIDGETBG),  # 鼠标悬停时的深蓝色
+                            ('pressed', WINDOWBG)], # 鼠标点击时的更深蓝色
+                foreground=[('active', TEXTFG),
+                            ('pressed', TEXTFG)],
+                borderwidth=[('active', 0), ('pressed', 0)],    
+                highlightthickness=[('active', 0), ('pressed', 0)],   )
+        # 配置被选中时的颜色
+        style.map("Main.Treeview",
+                background=[('selected', AlphaBlend(WINDOWBG,HIGHLIGHT,0.5))],
+                foreground=[('selected',TEXTFG )],
+                borderwidth=[('active', 0), ('pressed', 0)],    # 外边框宽度设为 0
+                highlightthickness=[('active', 0), ('pressed', 0)],)    # 高亮边框宽度设为 0
+
+        tk.Label(self.root, bg=WINDOWBG, fg=SECONDARYTEXTFG, anchor='w',text='双击科目或作业进入编辑模式,记得点击"保存作业"按钮!').place(x=20, y=750, width=860, height=30)
+
+
+        self.scrollbar_treeview_y=DScrollbar(self.root)
+        self.scrollbar_treeview_y.place(x=870,y=20,width=30,height=720)
+        self.treeview_homework= ttk.Treeview(self.root, show="tree headings", columns=["homework"],takefocus=True,
+                                          selectmode='browse', yscrollcommand=self.scrollbar_treeview_y.set,style='Main.Treeview')
+        self.treeview_homework.place(x=20,y=20,width=850,height=720)
+
+        self.scrollbar_treeview_y.config(command=self.treeview_homework.yview)
+
+        self.treeview_homework.heading("#0", text="科目", anchor='center')
+        self.treeview_homework.heading("homework", text="作业内容", anchor='center')
+
+        self.treeview_homework.column("#0", width=150, anchor='w')
+        self.treeview_homework.column("homework", width=680, anchor='w')
+        
+        # 绑定展开和收起事件,同时刷新状态文字和行颜色
+        def on_treeview_open(event):
+            item = self.treeview_homework.focus()
+            
+            self.root.after_idle(lambda: self._update_subject_state(item))
+            self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
+
+        def on_treeview_close(event):
+            item = self.treeview_homework.focus()
+       
+            self.root.after_idle(lambda: self._update_subject_state(item))
+            self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
+
+        self.treeview_homework.bind('<<TreeviewOpen>>', on_treeview_open)
+        self.treeview_homework.bind('<<TreeviewClose>>', on_treeview_close)
+
+        self.treeview_homework.bind('<Double-Button-1>', self.edit_homework)
+
+
+        self.button_edit_homework=DButton(self.root,text='编辑科目',fg=GREENLIGHT,font=YAHEI_TEXT_FONT,command=self.edit_homework)
+        self.button_edit_homework.place(x=920,y=20,width=260,height=60)
+
+        self.button_export_image=DButton(self.root,text='生成图片',font=YAHEI_TEXT_FONT,fg=HIGHLIGHT,command=self.export_homework_image)
+        self.button_export_image.place(x=920,y=100,width=260,height=60)
+
+        self.button_save_homework_file=DButton(self.root,text='保存作业',font=YAHEI_TEXT_FONT,command=self.save_homework_history)
+        self.button_save_homework_file.place(x=920,y=180,width=260,height=60)
+
+        self.button_load_homework_file=DButton(self.root,text='回溯历史记录',font=YAHEI_TEXT_FONT,command=self.load_homework_history)
+        self.button_load_homework_file.place(x=920,y=260,width=260,height=60)
+
+        # 自习考勤：两行 —— 勾选 + 实到人数（实到写入考勤历史,不写配置；应到在设置中）
+        self.var_attendance_enabled = tk.BooleanVar(value=bool(getattr(self, 'attendance_enabled', False)))
+        self.checkbutton_attendance = DCheckbutton(self.root, text='考勤人数:',variable=self.var_attendance_enabled,command=self._on_attendance_toggle,)
+        self.checkbutton_attendance.place(x=920, y=340, width=260, height=30)
+
+        _exp = max(int(getattr(self, 'expected_attendance', 50) or 50),0)
+ 
+        self.spinbox_attendance = DTouchSpinbox2(self.root, long_press_ms=50, int_only=True, from_=0, to=_exp, increment=1, )
+        # 优先读今日考勤历史中的实到；没有则用设置里的应到人数
+        self.spinbox_attendance.place(x=920, y=380, width=260, height=40)
+        self._load_attendance_into_ui()
+        # 仅勾选时可编辑
+        self._set_attendance_spinbox_state(bool(self.var_attendance_enabled.get()))
+
+        # 「清理历史记录」已移至设置页「账密设置」右侧；主界面其余按钮位置不变
+        self.button_exit_app=DButton(self.root,text='关闭程序',font=YAHEI_TEXT_FONT,command=self.exit_app,fg=REDTEXTFG)
+        self.button_exit_app.place(x=920,y=590,width=260,height=60)
+
+        self.button_settings=DButton(self.root,text='设置',command=self.open_settings_window,)
+        self.button_settings.place(x=920,y=670,width=80,height=30)
+
+        self.button_about=DButton(self.root,text='关于',command=self.about,)
+        self.button_about.place(x=1020,y=670,width=80,height=30)
+
+        self.frame_open_update_website=tk.Frame(self.root,bg=WINDOWBG,)
+        self.frame_open_update_website.place(x=920,y=720,width=260,height=60)
+
+        self.button_open_update_website=DAlphaButton(self.frame_open_update_website,text='正在获取更新',font=YAHEI_TEXT_FONT)
+        self.button_open_update_website.pack(fill='both',expand=True)
+
+        ConvertPlaceToRelative(self.root)
 
     def check_update(self,):
-        
         update_file_url = "https://github.com/zhatujianguanzhe/homeworktool/blob/main/homeworktool.py"
-        update_file_url_backup = "https://hfyzdns.cn/sandbox/homeworktool.py"
+        update_file_url_backup = "https://hfyzdns.cn/sandbox/s/wanseitool/homeworktool.py"
         try:
-            online_version = get_online_version(update_file_url)
+            self.ONLINE_VERSION = get_ONLINE_VERSION(update_file_url)
         except Exception:
             print(f"从Github获取更新失败:\n=======================\n{traceback.format_exc()}\n=======================\n\n正在从镜像获取更新.")
             try:
-                online_version = get_online_version(update_file_url_backup)
+                self.ONLINE_VERSION = get_ONLINE_VERSION(update_file_url_backup)
             except Exception:
-                online_version = None
+                self.ONLINE_VERSION = None
                 print(f"从镜像获取更新失败:\n=======================\n{traceback.format_exc()}\n=======================\n")
             
         local_version=get_local_version()
-        print(f"最新版本: {online_version}\n当前版本: {local_version}")
+        print(f"最新版本: {self.ONLINE_VERSION}\n当前版本: {local_version}")
 
-        button_open_update_website=DAlphaButton(self.frame_open_update_website,command=lambda:webbrowser.open_new_tab("https://github.com/zhatujianguanzhe/homeworktool/releases"),font=YAHEI_TEXT_FONT)
-        button_open_update_website.pack(fill='both')
+
         
-        if online_version==None:
-            button_open_update_website.destroy()
-            tk.Label(self.frame_open_update_website,bg=WINDOWBG,text="获取更新失败",fg=TEXTFG,font=YAHEI_TEXT_FONT).pack(fill='both')
-        elif online_version[0]> local_version[0]:
-            button_open_update_website.config(text=f"发现大更新版本: V{'.'.join([str(x) for x in online_version])}",fg=REDTEXTFG)
-        elif online_version[0]==local_version[0] and online_version[1]> local_version[1]:
-            button_open_update_website.config(text=f"发现质量更新版本: V{'.'.join([str(x) for x in online_version])}",fg=YELLOWTEXTFG)
-        elif online_version[0]==local_version[0] and online_version[1]==local_version[1] and online_version[2]> local_version[2]:
-            button_open_update_website.config(text=f"发现小更新版本: V{'.'.join([str(x) for x in online_version])}",fg=HIGHLIGHT)
+        if self.ONLINE_VERSION==None:
+            self.UPDATE_LEVEL='unknow'
+            self.button_open_update_website.config(text='获取更新失败',command=self.open_update_window)
+         #   tk.Label(self.frame_open_update_website,bg=WINDOWBG,text="获取更新失败",fg=TEXTFG,font=YAHEI_TEXT_FONT).pack(fill='both')
+        elif self.ONLINE_VERSION[0]> local_version[0]:
+            self.UPDATE_LEVEL='high'
+            self.button_open_update_website.config(command=self.open_update_window, text=f"发现大更新版本: V{'.'.join([str(x) for x in self.ONLINE_VERSION])}",fg=REDTEXTFG)
+        elif self.ONLINE_VERSION[0]==local_version[0] and self.ONLINE_VERSION[1]> local_version[1]:
+            self.UPDATE_LEVEL='medium'
+            self.button_open_update_website.config(command=self.open_update_window, text=f"发现质量更新版本: V{'.'.join([str(x) for x in self.ONLINE_VERSION])}",fg=YELLOWTEXTFG)
+        elif self.ONLINE_VERSION[0]==local_version[0] and self.ONLINE_VERSION[1]==local_version[1] and self.ONLINE_VERSION[2]> local_version[2]:
+            self.UPDATE_LEVEL='low'
+            self.button_open_update_website.config(command=self.open_update_window, text=f"发现小更新版本: V{'.'.join([str(x) for x in self.ONLINE_VERSION])}",fg=HIGHLIGHT)
         else:
-            button_open_update_website.destroy()
-            tk.Label(self.frame_open_update_website,bg=WINDOWBG,text="当前已是最新版本",fg=GREENLIGHT,font=YAHEI_TEXT_FONT).pack(fill='both')
-      
-        
+            self.UPDATE_LEVEL='none'
+            self.button_open_update_website.config(text='当前已是最新版本',fg=GREENLIGHT,command=self.open_update_window, )
+           
+    def open_update_window(self,):
+        def close_update_window(event=None):
+            self.root.attributes('-disabled', False)
+            self.update_window.destroy()
+            self.root.focus_set()
+        self.root.attributes('-disabled', True)
+        self.update_window = tk.Toplevel(self.root)
+        self.update_window.title('软件更新')
+        self.update_window.geometry(f'240x220+{(self.update_window.winfo_screenwidth() - 240) // 2}+{(self.update_window.winfo_screenheight() - 220) // 2}')
+        self.update_window.resizable(False, False)
+        self.update_window['bg'] = WINDOWBG
+        self.update_window.protocol('WM_DELETE_WINDOW', close_update_window)
+        self.update_window.bind('<Escape>', close_update_window)
+        self.update_window.wm_transient(self.root)
+        self.update_window.focus()
+        color_dict={'unknow':SECONDARYTEXTFG,'high':REDTEXTFG,'medium':YELLOWTEXTFG,'low':HIGHLIGHT,'none':GREENLIGHT}
 
+        tk.Label(self.update_window,bg=WINDOWBG,text='当前版本:',fg=TEXTFG).place(x=20,y=20,height=30)
+        label_local_version=tk.Label(self.update_window,anchor='e',text=VERSION,bg=WINDOWBG,fg=color_dict[self.UPDATE_LEVEL])
+        label_local_version.place(x=130,y=20,width=90,height=30)
+
+        tk.Label(self.update_window,fg=TEXTFG,bg=WINDOWBG,text='最新版本:').place(x=20,y=70,height=30)
+        label_online_version=tk.Label(self.update_window,anchor='e',text='.'.join([str(x) for x in self.ONLINE_VERSION]) if self.ONLINE_VERSION!=None else "获取失败",bg=WINDOWBG,fg=SECONDARYTEXTFG)
+        label_online_version.place(x=130,y=70,width=90,height=30)
+
+        button_goto_github_release=DButton(self.update_window,text='前往Github下载页',command=lambda:webbrowser.open('https://github.com/zhatujianguanzhe/homeworktool/releases'))
+        button_goto_github_release.place(x=20,y=120,width=200,height=30)
+
+        button_goto_github_release=DButton(self.update_window,text='前往社团网站下载页(推荐)',command=lambda:webbrowser.open('https://hfyzdns.cn/sandbox/s/wanseitool/'))
+        button_goto_github_release.place(x=20,y=170,width=200,height=30)
+
+        SetDarkTitleBar(self.update_window)
+        self.update_window.wm_iconbitmap(f"{libresource}icon.ico")
+        self.update_window.mainloop()
 
     def load_runtime_settings(self):
         """从 settings 合并导出/界面常量到 self.export_cfg. 并同步全局 YAHEI_TEXT_FONT."""
@@ -946,146 +1114,6 @@ class Main():
                 raise
             MessageBoxModern(parent=self.root, title='错误', text=traceback.format_exc(), text_blod='导出作业图片失败', icon='error')
 
-    def layout_window(self,):
-        self.root=tk.Tk()
-        self.root.title('万岁™作业布置与展示工具    (合肥市阳光中学特供版 & 合肥市第一中学特供版)')
-        SetDarkTitleBar(self.root)
-        width = 1200
-        height = 800
-        screenwidth = self.root.winfo_screenwidth()
-        screenheight = self.root.winfo_screenheight()
-        geometry = '%dx%d+%d+%d' % (width, height, (screenwidth - width) / 2, (screenheight - height) / 2)
-        self.root.geometry(geometry)
-        self.root['bg']=WINDOWBG
-        self.root.protocol('WM_DELETE_WINDOW', self.exit_app)
-
-        
-
-        if isinstance(YAHEI_TEXT_FONT,str):
-            self.font_icon=tkfont.Font(family='WS_Segoe_MDL2_Assets',size=9)
-        else:
-            self.font_icon=tkfont.Font(family='WS_Segoe_MDL2_Assets',size=self.settings.get('YAHEI_TEXT_FONT',['微软雅黑', 12])[1])
-
-
-        threading.Thread(target=self.check_update,daemon=True).start()
-
-        style = ttk.Style()
-        style.theme_use("alt")
-
-        style.configure("Main.Treeview", rowheight=40,
-                        fieldbackground=WINDOWBG,
-                        background=WINDOWBG,
-                        foregroung=TEXTFG,
-                        borderwidth=0,
-                        highlightthickness=0,
-                        font=YAHEI_TEXT_FONT ) # 填充背景色
-   
-        style.configure("Main.Treeview.Heading",
-                        background=WINDOWBG,      # 表头背景色
-                        foreground=TEXTFG,        # 表头文字颜色
-                        borderwidth=0,
-                        highlightthickness=0,
-                        font=YAHEI_TEXT_FONT)          # 扁平化边框
-        # 3. 关键步骤：锁死动态样式（防止鼠标悬停或点击时变回系统默认的灰色）
-        
-        style.map("Main.Treeview.Heading",
-                background=[('active', WIDGETBG),  # 鼠标悬停时的深蓝色
-                            ('pressed', WINDOWBG)], # 鼠标点击时的更深蓝色
-                foreground=[('active', TEXTFG),
-                            ('pressed', TEXTFG)],
-                borderwidth=[('active', 0), ('pressed', 0)],    
-                highlightthickness=[('active', 0), ('pressed', 0)],   )
-        # 配置被选中时的颜色
-        style.map("Main.Treeview",
-                background=[('selected', AlphaBlend(WINDOWBG,HIGHLIGHT,0.5))],
-                foreground=[('selected',TEXTFG )],
-                borderwidth=[('active', 0), ('pressed', 0)],    # 外边框宽度设为 0
-                highlightthickness=[('active', 0), ('pressed', 0)],)    # 高亮边框宽度设为 0
-
-        tk.Label(self.root, bg=WINDOWBG, fg=SECONDARYTEXTFG, anchor='w',text='双击科目或作业进入编辑模式,记得点击"保存作业"按钮!').place(x=20, y=750, width=860, height=30)
-
-
-        self.scrollbar_treeview_y=DScrollbar(self.root)
-        self.scrollbar_treeview_y.place(x=870,y=20,width=30,height=720)
-        self.treeview_homework= ttk.Treeview(self.root, show="tree headings", columns=["homework"],takefocus=True,
-                                          selectmode='browse', yscrollcommand=self.scrollbar_treeview_y.set,style='Main.Treeview')
-        self.treeview_homework.place(x=20,y=20,width=850,height=720)
-
-        self.scrollbar_treeview_y.config(command=self.treeview_homework.yview)
-
-        self.treeview_homework.heading("#0", text="科目", anchor='center')
-        self.treeview_homework.heading("homework", text="作业内容", anchor='center')
-
-        self.treeview_homework.column("#0", width=150, anchor='w')
-        self.treeview_homework.column("homework", width=680, anchor='w')
-        
-        # 绑定展开和收起事件,同时刷新状态文字和行颜色
-        def on_treeview_open(event):
-            item = self.treeview_homework.focus()
-            
-            self.root.after_idle(lambda: self._update_subject_state(item))
-            self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
-
-        def on_treeview_close(event):
-            item = self.treeview_homework.focus()
-       
-            self.root.after_idle(lambda: self._update_subject_state(item))
-            self.root.after_idle(lambda: SetExpandedTreeviewRowColor(self.treeview_homework))
-
-        self.treeview_homework.bind('<<TreeviewOpen>>', on_treeview_open)
-        self.treeview_homework.bind('<<TreeviewClose>>', on_treeview_close)
-
-        self.treeview_homework.bind('<Double-Button-1>', self.edit_homework)
-
-
-        self.button_edit_homework=DButton(self.root,text='编辑科目',fg=GREENLIGHT,font=YAHEI_TEXT_FONT,command=self.edit_homework)
-        self.button_edit_homework.place(x=920,y=20,width=260,height=60)
-
-        self.button_export_image=DButton(self.root,text='生成图片',font=YAHEI_TEXT_FONT,fg=HIGHLIGHT,command=self.export_homework_image)
-        self.button_export_image.place(x=920,y=100,width=260,height=60)
-
-        self.button_save_homework_file=DButton(self.root,text='保存作业',font=YAHEI_TEXT_FONT,command=self.save_homework_history)
-        self.button_save_homework_file.place(x=920,y=180,width=260,height=60)
-
-        self.button_load_homework_file=DButton(self.root,text='载入历史记录',font=YAHEI_TEXT_FONT,command=self.load_homework_history)
-        self.button_load_homework_file.place(x=920,y=260,width=260,height=60)
-
-        # 自习考勤：两行 —— 勾选 + 实到人数（实到写入考勤历史,不写配置；应到在设置中）
-        self.var_attendance_enabled = tk.BooleanVar(value=bool(getattr(self, 'attendance_enabled', False)))
-        self.checkbutton_attendance = DCheckbutton(
-            self.root,
-            text='考勤人数:',
-            variable=self.var_attendance_enabled,
-            command=self._on_attendance_toggle,
-        )
-        self.checkbutton_attendance.place(x=920, y=340, width=260, height=30)
-
-        _exp = max(int(getattr(self, 'expected_attendance', 50) or 50),0)
- 
-        self.spinbox_attendance = DTouchSpinbox2(
-            self.root, long_press_ms=50, int_only=True, from_=0, to=_exp, increment=1,
-        )
-        # 优先读今日考勤历史中的实到；没有则用设置里的应到人数
-        self.spinbox_attendance.place(x=920, y=380, width=260, height=40)
-        self._load_attendance_into_ui()
-        # 仅勾选时可编辑
-        self._set_attendance_spinbox_state(bool(self.var_attendance_enabled.get()))
-
-        # 「清理历史记录」已移至设置页「账密设置」右侧；主界面其余按钮位置不变
-        self.button_exit_app=DButton(self.root,text='关闭程序',font=YAHEI_TEXT_FONT,command=self.exit_app,fg=REDTEXTFG)
-        self.button_exit_app.place(x=920,y=520,width=260,height=60)
-
-        self.button_settings=DButton(self.root,text='设置',command=self.open_settings_window,)
-        self.button_settings.place(x=920,y=600,width=80,height=30)
-
-        self.button_about=DButton(self.root,text='关于',command=self.about,)
-        self.button_about.place(x=1020,y=600,width=80,height=30)
-
-        self.frame_open_update_website=tk.Frame(self.root,bg=WINDOWBG,)
-        self.frame_open_update_website.place(x=920,y=720,width=260,height=60)
-
-        ConvertPlaceToRelative(self.root)
-
     def exit_app(self,):
         # 退出时保存今日实到考勤（若已勾选）
         if bool(self.var_attendance_enabled.get()):
@@ -1099,8 +1127,7 @@ class Main():
         state = 'normal' if enabled else 'disabled'
         
         self.spinbox_attendance.config(state=state)
-       # self.spinbox_attendance.DButton_up.config(state=state)
-      #  self.spinbox_attendance.DButton_down.config(state=state)
+       
     def _on_attendance_toggle(self):
         """主界面自习考勤勾选变化时写入 settings（仅开关,不含实到人数）."""
         enabled = bool(self.var_attendance_enabled.get())
@@ -1192,6 +1219,7 @@ class Main():
     def _save_settings_file_quiet(self):
         with open('homeworktool_settings.json', 'w', encoding='utf-8') as f:
             json.dump(self.settings, f, ensure_ascii=False, indent=2)
+  
     def get_subject_password(self, subject):
         """获取科目对应密码;无独立条目时回退 default"""
         pwd_map = self.settings.get('password', {})
@@ -2315,7 +2343,7 @@ class Main():
             win.destroy()
             self.root.focus()
         win = tk.Toplevel(self.root)
-        win.title('载入历史记录')
+        win.title('回溯历史记录')
         SetDarkTitleBar(win)
         w, h = 900, 540
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
@@ -2468,7 +2496,6 @@ class Main():
         ConvertPlaceToRelative(win)
         win.iconbitmap(f'{libresource}icon.ico')
         win.wait_window()
-
 
     def _open_import_homework_window(self, target_date, target_homework, subjects):
         """导入选项：表格列出科目及其每条作业,默认全不勾选.
@@ -2652,8 +2679,6 @@ class Main():
         win.iconbitmap(f'{libresource}icon.ico')
         win.wait_window()
 
-
-
     def autoload_homework_histroy(self):
         try:
             date = datetime.datetime.now().strftime('%Y-%m-%d')
@@ -2683,6 +2708,7 @@ class Main():
         except (OSError, json.JSONDecodeError, KeyError, tk.TclError, TypeError, ValueError):
             pass  # 自动加载失败不阻断启动
         self._load_attendance_into_ui()
+    
     def apply_homework_template(self,):
         # 默认九科（保证绝对顺序）
         default_subjects = ['语文', '数学', '英语', '物理', '化学', '生物', '政治', '历史', '地理']
@@ -3290,7 +3316,6 @@ class Main():
         ConvertPlaceToRelative(window_settings)
         window_settings.iconbitmap(f"{libresource}icon.ico")
         window_settings.wait_window()
-
 
     def open_advanced_settings_window(self, parent=None):
         """高级设置：三列表格（说明 / 变量名 / 值），双击值列编辑.
@@ -3951,9 +3976,6 @@ class Main():
         SetDarkTitleBar(self.about_window)
         self.about_window.wm_iconbitmap(f"{libresource}icon.ico")
         self.about_window.wait_window()
-
-
-
 
 
 
